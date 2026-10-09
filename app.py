@@ -1,960 +1,532 @@
+"""
+UR Dashboard • PLKK  (Streamlit)
+Dashboard kosong sampai workbook Excel berformat BMIV diunggah.
+Jalankan:  streamlit run app.py
+"""
 import io
-from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+import streamlit as st
 
-# ============================================================
-# CONFIG
-# ============================================================
-st.set_page_config(
-    page_title="UR Dashboard • PLKK",
-    page_icon="📊",
-    layout="wide",
-)
+st.set_page_config(page_title="UR Dashboard • PLKK", page_icon="📊", layout="wide")
 
-st.markdown("""
-<style>
-.block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
-.kpi {
-    padding: 0.9rem 1rem;
-    border: 1px solid #e5e7eb;
-    border-radius: 12px;
-    background: #ffffff;
-    min-height: 95px;
-}
-.kpi .v {font-size: 1.35rem; font-weight: 750; line-height: 1.2;}
-.kpi .l {font-size: .78rem; color: #667085; margin-top: .3rem;}
-.section-title {font-size: 1.05rem; font-weight: 700; margin: .5rem 0 .7rem;}
-.small-note {font-size: .78rem; color: #667085;}
-</style>
-""", unsafe_allow_html=True)
+# ----------------------------------------------------------------------------
+# Konstanta
+# ----------------------------------------------------------------------------
+BS = ["RJTP", "RJTL", "RANAP", "Khusus"]
+BN = ["BMIV-01 · RJTP", "BMIV-02 · RJTL", "BMIV-03 · RANAP", "BMIV-04 · Khusus"]
+BC = ["#2a9d8f", "#3b82f6", "#e9a23b", "#a855f7"]
+BD = [
+    "Rawat Jalan Tingkat Pertama — dokter umum, gigi, obat, penunjang diagnostik, tindakan medis.",
+    "Rawat Jalan Tingkat Lanjutan — dokter spesialis, laboratorium, radiologi, fisioterapi, ODC, emergensi.",
+    "Rawat Inap — akomodasi, operasi, ICU, transfusi, implan ortopedi, penunjang, lengkap dengan distribusi ALOS.",
+    "Pelayanan khusus & alat bantu — kaca mata, gigi palsu, protesis, ambulans, program RTW.",
+]
+MON = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 
-# ============================================================
-# SERVICE MAP
-# Posisi kolom mengikuti template BMIV yang diberikan.
-# Index kolom adalah 0-based karena pandas membaca header=None.
-# ============================================================
-SERVICE_MAP = {
-    "RJTP": [
-        ("Dokter Umum", "kunjungan", "BMIV-01", [23], 24),
-        ("Dokter Gigi (trauma)", "tindakan", "BMIV-01", [25], 31),
-        ("Obat / Resep", "resep", "BMIV-01", [32, 33], 34),
-        ("Penunjang Diagnostik Sederhana", "pemeriksaan", "BMIV-01", list(range(35, 40)), 40),
-        ("Tindakan Medis Dokter Umum", "tindakan", "BMIV-01", list(range(41, 52)), 52),
-        ("Tindakan Medis Dokter Gigi", "tindakan", "BMIV-01", list(range(53, 59)), 59),
-        ("Vaksin & Profilaksis", "dosis", "BMIV-01", list(range(60, 64)), 64),
-        ("Rujukan", "rujukan", "BMIV-01", list(range(65, 68)), None),
-    ],
-    "RJTL": [
-        ("Dokter Spesialis", "kunjungan", "BMIV-02", [25], 26),
-        ("Obat / Resep", "resep", "BMIV-02", [29], 30),
-        ("Radiologi / Rontgen", "pemeriksaan", "BMIV-02", [33, 35], [34, 36]),
-        ("Laboratorium", "pemeriksaan", "BMIV-02", [31], 32),
-        ("Pemeriksaan Khusus / Elektromedik", "pemeriksaan", "BMIV-02", [37, 39, 41, 43, 45, 47, 49], [38, 40, 42, 44, 46, 48, 50]),
-        ("Patologi Anatomi", "pemeriksaan", "BMIV-02", [51], 52),
-        ("Tindakan Medis Spesialis", "tindakan", "BMIV-02", [54, 56], [55, 57]),
-        ("Fisioterapi", "kunjungan", "BMIV-02", [58], 59),
-        ("Rehabilitasi Medik Lain", "kunjungan", "BMIV-02", [60], 61),
-        ("Emergensi", "kunjungan", "BMIV-02", [62], 63),
-    ],
-    "RANAP": [
-        ("Akomodasi Rawat Inap", "kasus", "BMIV-03", [25], 27),
-        ("Obat / Resep", "resep", "BMIV-03", [30], 32),
-        ("Operasi", "tindakan", "BMIV-03", [33, 34, 35, 36], 37),
-        ("Perawatan Khusus (ICU/HCU/Burn)", "kasus", "BMIV-03", [38], 40),
-        ("Radiologi / Rontgen", "pemeriksaan", "BMIV-03", [43, 45], [44, 46]),
-        ("Laboratorium", "pemeriksaan", "BMIV-03", [41], 42),
-        ("Pemeriksaan Khusus / Elektromedik", "pemeriksaan", "BMIV-03", [47, 49, 51, 53, 55, 57, 59], [48, 50, 52, 54, 56, 58, 60]),
-        ("Patologi Anatomi", "pemeriksaan", "BMIV-03", [61], 62),
-        ("Tindakan Medis Spesialis", "tindakan", "BMIV-03", [64, 65], 66),
-        ("Labu Darah", "labu", "BMIV-03", [67], 68),
-        ("Transfusi Darah", "tindakan", "BMIV-03", [69], 70),
-        ("Implan Ortopedi (Pin, Plate, Screw)", "kasus", "BMIV-03", [71], 72),
-        ("Fisioterapi", "tindakan", "BMIV-03", [74], 75),
-        ("Rehabilitasi Medik Lain", "tindakan", "BMIV-03", [76], 77),
-    ],
-    "KHUSUS": [
-        ("Kaca Mata", "unit", "BMIV-04", [22], 23),
-        ("Gigi Palsu", "unit", "BMIV-04", [24], 25),
-        ("Protesis Anggota Gerak", "unit", "BMIV-04", [26], 27),
-        ("Ortosis", "unit", "BMIV-04", [28], 29),
-        ("Alat Bantu Jalan", "unit", "BMIV-04", [30], 31),
-        ("Alat Bantu Dengar", "unit", "BMIV-04", [32], 33),
-        ("Mata Palsu", "unit", "BMIV-04", [34], 35),
-        ("Ambulans / Transportasi", "perjalanan", "BMIV-04", [36], 37),
-        ("Program Kembali Bekerja (RTW)", "kasus", "BMIV-04", [38], 39),
-    ],
-}
+# (kode, nama, kolom biaya, kolom volume) — posisi kolom (0-based) pada template BMIV.
+# Data pada template bergeser dari header di beberapa blok, sehingga dipetakan per posisi data.
+S1 = [("RJTP-01", "Dokter Umum", [23], [22]), ("RJTP-02", "Tindakan Gigi", [30], range(24, 30)),
+      ("RJTP-03", "Obat/Resep", [32, 34, 36], [31, 33, 35]), ("RJTP-04", "Penunjang Diagnostik", [42], range(37, 42)),
+      ("RJTP-05", "Tindakan Medis Dokter Umum", [54], range(43, 54)),
+      ("RJTP-06", "Tindakan Medis Dokter Gigi", [61], range(55, 61))]
+S2 = [("RJTL-01", "Jasa Dokter Spesialis", [25], [24]), ("RJTL-02", "Obat KS", [27], [26]),
+      ("RJTL-03", "Obat LB", [29], [28]), ("RJTL-04", "Obat RX", [31], [30]),
+      ("RJTL-05", "Laboratorium", [33], [32]), ("RJTL-06", "Radiologi (Rontgen)", [35], [34]),
+      ("RJTL-07", "EKG", [37], [36]), ("RJTL-08", "CT Scan", [39], [38]), ("RJTL-09", "MRI", [41], [40]),
+      ("RJTL-10", "USG", [43], [42]), ("RJTL-11", "EMG/NCV", [45], [44]), ("RJTL-12", "Elektromedik Lain", [47], [46]),
+      ("RJTL-13", "Tindakan Spesialis", [51], [50]), ("RJTL-14", "ODC", [53], [52]),
+      ("RJTL-15", "Fisioterapi", [55], [54]), ("RJTL-16", "Rehab Medik Lain", [57], [56]),
+      ("RJTL-17", "Emergensi", [59], [58]), ("RJTL-18", "Ambulans", [61], [60]), ("RJTL-19", "Homecare", [63], [62])]
+S3 = [("RI-01", "Akomodasi Rawat Inap", [26], [25]), ("RI-02", "Obat/Resep", [31], [27, 28, 29]),
+      ("RI-03", "Tindakan Non Operatif", [33], [32]), ("RI-04", "Operasi Kecil", [36], [35]),
+      ("RI-05", "Operasi Sedang", [38], [37]), ("RI-06", "Operasi Besar", [40], [39]),
+      ("RI-07", "Operasi Khusus", [42], [41]), ("RI-08", "ICU/ICCU/HCU/Burn Unit", [45], [44]),
+      ("RI-09", "Lab", [47], [46]), ("RI-10", "Rontgen", [49], [48]), ("RI-11", "EKG", [51], [50]),
+      ("RI-12", "CT Scan", [53], [52]), ("RI-13", "MRI", [55], [54]), ("RI-14", "USG", [57], [56]),
+      ("RI-15", "EMG/NCV", [59], [58]), ("RI-16", "Elektromedik Lain", [61], [60]),
+      ("RI-17", "Pelayanan Darah", [65], [64]), ("RI-18", "Transfusi Darah", [67], [66]),
+      ("RI-19", "Implan Ortopedi", [69], [68]), ("RI-20", "Fisioterapi", [72], [71]),
+      ("RI-21", "Rehab Medik Lain", [74], [73]), ("RI-22", "Ambulans", [76], [75]), ("RI-23", "Homecare", [78], [77])]
+S4 = [("AB-01", "Kacamata"), ("AB-02", "Gigi Palsu"), ("AB-03", "Protesis Anggota Gerak"), ("AB-04", "Ortosis"),
+      ("AB-05", "Alat Bantu Jalan"), ("AB-06", "Alat Bantu Dengar"), ("AB-07", "Mata Palsu"),
+      ("AB-08", "Ambulans/Transportasi"), ("AB-09", "Program Kembali Bekerja (RTW)")]
 
-BMIV_LABEL = {
-    "RJTP": "BMIV-01",
-    "RJTL": "BMIV-02",
-    "RANAP": "BMIV-03",
-    "KHUSUS": "BMIV-04",
-}
-GROUP_LABEL = {
-    "RJTP": "BMIV-01 · RJTP",
-    "RJTL": "BMIV-02 · RJTL",
-    "RANAP": "BMIV-03 · RANAP",
-    "KHUSUS": "BMIV-04 · Khusus",
-}
+SECTOR_KEYS = [
+    ("pendidikan", "Jasa Pendidikan"), ("perdagangan", "Perdagangan & Ritel"), ("niaga", "Perdagangan & Ritel"),
+    ("mart", "Perdagangan & Ritel"), ("retail", "Perdagangan & Ritel"), ("angkutan", "Transportasi & Logistik"),
+    ("logistik", "Transportasi & Logistik"), ("ekspedisi", "Transportasi & Logistik"),
+    ("kargo", "Transportasi & Logistik"), ("terminal", "Transportasi & Logistik"),
+    ("pergudangan", "Transportasi & Logistik"), ("infrastruktur", "Konstruksi"), ("konstruksi", "Konstruksi"),
+    ("teknik sipil", "Konstruksi"), ("pondasi", "Konstruksi"), ("struktur", "Konstruksi"),
+    ("kertas", "Industri Manufaktur"), ("plastik", "Industri Manufaktur"), ("kimia", "Industri Manufaktur"),
+    ("logam", "Industri Manufaktur"), ("makanan", "Industri Manufaktur"), ("cleaning", "Jasa Penunjang"),
+    ("sekuriti", "Jasa Penunjang"), ("sawit", "Pertanian & Perkebunan"), ("pertanian", "Pertanian & Perkebunan"),
+    ("hotel", "Perhotelan"), ("finansial", "Keuangan"), ("migas", "Migas & Pertambangan"),
+    ("teknologi", "Teknologi Informasi")]
 
-# Kolom fallback dari template lama
-BRANCH_COL = {"BMIV-01": 8, "BMIV-02": 8, "BMIV-03": 9, "BMIV-04": 6}
-PLKK_COL = {"BMIV-01": 4, "BMIV-02": 4, "BMIV-03": 4, "BMIV-04": 11}
-DATE_COL = {"BMIV-01": 2, "BMIV-02": 2, "BMIV-03": 2, "BMIV-04": 2}
 
-MONTHS = {
-    "Januari": 1, "Februari": 2, "Maret": 3, "April": 4,
-    "Mei": 5, "Juni": 6, "Juli": 7, "Agustus": 8,
-    "September": 9, "Oktober": 10, "November": 11, "Desember": 12,
-}
+# ----------------------------------------------------------------------------
+# Helper format (gaya Indonesia)
+# ----------------------------------------------------------------------------
+def _id(s: str) -> str:
+    return s.replace(",", "§").replace(".", ",").replace("§", ".")
 
-def num(x):
-    if pd.isna(x):
-        return 0.0
+
+def fN(n):
+    return _id(f"{n:,.0f}")
+
+
+def f1(n):
+    return _id(f"{n:,.1f}")
+
+
+def fF(n):
+    return "Rp " + fN(n)
+
+
+def fR(n):
+    a = abs(n)
+    if a >= 1e9:
+        return "Rp " + _id(f"{n / 1e9:.2f}") + " M"
+    if a >= 1e6:
+        return "Rp " + _id(f"{n / 1e6:.1f}") + " jt"
+    return fF(n)
+
+
+def fP(x):
+    return f1(x * 100) + "%"
+
+
+def ml(p):
+    return f"{MON[int(p[5:7]) - 1]} {p[2:4]}"
+
+
+def sector(name: str) -> str:
+    n = str(name).lower()
+    for k, v in SECTOR_KEYS:
+        if k in n:
+            return v
+    return "Lainnya"
+
+
+def N(v):
     try:
-        return float(str(x).replace(",", "").replace("Rp", "").strip())
+        return 0.0 if pd.isna(v) else float(v)
     except Exception:
         return 0.0
 
-# ============================================================
-# STREAMLIT CACHE COMPATIBILITY
-# ============================================================
-_CACHE = getattr(st, "cache_data", None)
-if _CACHE is None:
-    _CACHE = getattr(st, "cache", None)
 
-def cache_compat(func):
-    if _CACHE is None:
-        return func
-    try:
-        return _CACHE(show_spinner=False)(func)
-    except TypeError:
-        return _CACHE(func)
-
-@cache_compat
-def load_excel_data(file_bytes):
+# ----------------------------------------------------------------------------
+# ETL: workbook BMIV -> tabel episode + tabel komponen
+# ----------------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def load(file_bytes: bytes):
     xl = pd.ExcelFile(io.BytesIO(file_bytes))
-    return {s: xl.parse(s, header=None) for s in xl.sheet_names}
+    names = xl.sheet_names
+    warns = []
+    cab = {}
+    norm = next((s for s in names if s.lower().startswith("dashboard_raw")), None)
+    if norm:
+        d = pd.read_excel(xl, norm, usecols=["KODE CAB", "Kantor Wilayah"]).drop_duplicates("KODE CAB")
+        cab = d.set_index("KODE CAB")["Kantor Wilayah"].to_dict()
 
-# ============================================================
-# HELPERS UNTUK MENCARI SHEET BMIV
-# ============================================================
-def find_sheet(sheets, prefix):
-    exact = [s for s in sheets if str(s).strip().upper() == prefix.upper()]
-    if exact:
-        return exact[0]
-    candidates = [s for s in sheets if str(s).strip().upper().startswith(prefix.upper())]
-    return candidates[0] if candidates else None
+    eps, comps = [], []
+    for b in range(4):
+        sh = next((s for s in names if s.upper().startswith(f"BMIV-0{b + 1}")), None)
+        if sh is None:
+            warns.append(f"Sheet BMIV-0{b + 1} tidak ditemukan — dilewati.")
+            continue
+        r = pd.read_excel(xl, sh)
+        cols = list(r.columns)
+        A = r.values
+        g = lambda c: cols.index(c) if c in cols else None  # noqa: E731
+        pc = 10 if b == 3 else 4
+        tc = {0: 66, 1: 64, 2: 80, 3: 39}[b]
+        for i in range(len(r)):
+            row = A[i]
+            if pd.isna(row[2]):
+                continue
+            c = []
+            if b < 3:
+                spec = (S1, S2, S3)[b]
+                for code, nm, cc, vc in spec:
+                    cost = sum(N(row[j]) for j in cc)
+                    vol = sum(N(row[j]) for j in vc)
+                    if b == 1 and code == "RJTL-19":
+                        others = sum(N(row[j]) for s in S2[:-1] for j in s[2])
+                        cost = max(0.0, N(row[63]) - others) if vol > 0 else 0.0
+                    if cost > 0 or vol > 0:
+                        c.append([code, nm, vol, cost])
+            else:
+                tot, oth = N(row[39]), 0.0
+                for k, (code, nm) in enumerate(S4[:8]):
+                    v, cost = N(row[22 + 2 * k]), N(row[23 + 2 * k])
+                    oth += cost
+                    if v > 0 or cost > 0:
+                        c.append([code, nm, v, cost])
+                if N(row[38]) > 0:
+                    c.append(["AB-09", S4[8][1], N(row[38]), max(0.0, tot - oth)])
+            approved = N(row[tc])
+            csum = sum(z[3] for z in c)
+            if b < 3 and csum > 0:
+                f = approved / csum
+                for z in c:
+                    z[3] = round(z[3] * f)
+            elif b < 3 and approved > 0 and c:
+                for z in c:
+                    z[3] = round(approved / len(c))
+            eid = len(eps)
+            gv = lambda name, default="": row[g(name)] if g(name) is not None else default  # noqa: E731
+            tgl = pd.Timestamp(row[2])
+            kode = gv("KODE CAB")
+            eps.append(dict(
+                id=eid, b=b, tgl=tgl, periode=tgl.strftime("%Y-%m"),
+                kpj=str(int(N(gv("NO KPJ")))), case=str(gv("NO. KASUS KK")),
+                kanwil=str(gv("KANWIL")), cabang=str(cab.get(kode, kode)), plkk=str(row[pc]),
+                jenis_kasus=str(gv("JENIS KASUS")), sektor=sector(gv("NAMA PERUSAHAAN")),
+                diagnosa=str(gv("DIAGNOSA")), total=round(approved),
+                los=int(N(row[25])) if b == 2 else 0, kelas=str(gv("KELAS RAWAT")) if b == 2 else "",
+                poli=str(gv("POLI / SPESIALISASI")) if b == 1 else "",
+                kunj_ke=int(N(gv("KUNJUNGAN KE-", 0))) if b in (0, 1) else 0))
+            for code, nm, v, cost in c:
+                comps.append((eid, b, code, nm, v, cost))
+    if not eps:
+        return None, None, warns + ["Tidak ada data BMIV yang terbaca. Pastikan format workbook sama dengan template."]
+    E = pd.DataFrame(eps)
+    C = pd.DataFrame(comps, columns=["id", "b", "kode", "komponen", "vol", "biaya"])
+    C["label"] = C.komponen + " · " + C.b.map(lambda i: BS[i])
+    return E, C, warns
 
-def locate_bmiv_sheets(sheets):
-    found = {}
-    missing = []
-    for bmiv in ["BMIV-01", "BMIV-02", "BMIV-03", "BMIV-04"]:
-        s = find_sheet(sheets, bmiv)
-        if s is None:
-            missing.append(bmiv)
+
+# ----------------------------------------------------------------------------
+# Agregasi
+# ----------------------------------------------------------------------------
+def agg(L, m):
+    pes, kas, kun, bi = L.kpj.nunique(), L["case"].nunique(), len(L), float(L.total.sum())
+    return dict(pes=pes, kas=kas, kun=kun, bi=bi, uc=bi / kun if kun else 0, pm=bi / (pes * m) if pes else 0,
+                cpc=bi / kas if kas else 0, ut=kun / pes * 1000 if pes else 0)
+
+
+def hbar(df, x, y, color, title=None, fmt="rp"):
+    d = df.iloc[::-1]
+    fig = go.Figure(go.Bar(x=d[x], y=d[y], orientation="h", marker_color=color,
+                           hovertemplate="%{y}<br>" + ("Rp %{x:,.0f}" if fmt == "rp" else "%{x:,.0f}") + "<extra></extra>"))
+    fig.update_layout(height=max(300, 30 * len(d) + 80), margin=dict(l=0, r=10, t=30 if title else 10, b=0),
+                      title=title, yaxis=dict(automargin=True))
+    st.plotly_chart(fig, width="stretch")
+
+
+NUM = st.column_config.NumberColumn
+RP = lambda label: NUM(label, format="localized")  # noqa: E731
+
+
+# ----------------------------------------------------------------------------
+# Views
+# ----------------------------------------------------------------------------
+def view_exec(L, C, m):
+    a = agg(L, m)
+    cols = st.columns(6)
+    cols[0].metric("Total Peserta", fN(a["pes"]), help="NO KPJ unik")
+    cols[1].metric("Kasus", fN(a["kas"]), help="No. Kasus KK unik")
+    cols[2].metric("Kunjungan", fN(a["kun"]), help="Jumlah episode layanan")
+    cols[3].metric("Total Biaya", fR(a["bi"]), help=fF(a["bi"]))
+    cols[4].metric("Unit Cost", fF(a["uc"]), help="Biaya / kunjungan")
+    cols[5].metric("PMPM", fF(a["pm"]), help=f"Biaya / peserta / bulan ({m} bulan)")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Komposisi Biaya per Kelompok Pelayanan (BMIV)")
+        bb = L.groupby("b").total.sum().reindex(range(4), fill_value=0)
+        fig = go.Figure(go.Pie(labels=BN, values=bb.values, hole=.6, marker_colors=BC, sort=False,
+                               hovertemplate="%{label}<br>Rp %{value:,.0f} (%{percent})<extra></extra>"))
+        fig.update_layout(height=400, margin=dict(t=10, b=0), legend=dict(orientation="h", y=-0.05))
+        st.plotly_chart(fig, width="stretch")
+    with c2:
+        st.subheader("Top 10 Komponen Layanan (penyerapan biaya)")
+        t = C.groupby("label").biaya.sum().sort_values(ascending=False).head(10).reset_index()
+        hbar(t, "biaya", "label", "#0f766e")
+    st.caption("PMPM = total biaya ÷ (peserta unik yang melapor klaim × jumlah bulan pada rentang filter) — proxy, "
+               "karena jumlah tenaga kerja terdaftar tidak tersedia. Biaya komponen dialokasikan proporsional "
+               "terhadap Total Disetujui tiap baris.")
+
+
+def view_trend(L, pers):
+    sel = st.radio("Metrik", ["Biaya", "Volume (Kunjungan)", "Utilisasi (kunjungan per 1.000 peserta)"], horizontal=True)
+    rows = []
+    for p in pers:
+        X = L[L.periode == p]
+        pes = X.kpj.nunique()
+        d = dict(periode=p, Bulan=ml(p), pes=pes, kas=X["case"].nunique(), kun=len(X), bi=float(X.total.sum()))
+        d["ut"] = d["kun"] / pes * 1000 if pes else 0
+        for b in range(4):
+            Xb = X[X.b == b]
+            d[f"bi{b}"], d[f"kun{b}"] = float(Xb.total.sum()), len(Xb)
+            d[f"ut{b}"] = len(Xb) / pes * 1000 if pes else 0
+        rows.append(d)
+    T = pd.DataFrame(rows)
+    labs = list(T.Bulan)
+    fig = go.Figure()
+    if sel.startswith("Utilisasi"):
+        fig.add_trace(go.Scatter(x=labs, y=T.ut, name="Total", line=dict(width=4, color="#64748b")))
+        for b in range(4):
+            fig.add_trace(go.Scatter(x=labs, y=T[f"ut{b}"], name=BN[b], line=dict(color=BC[b])))
+        fig.update_yaxes(title="kunjungan / 1.000 peserta")
+    else:
+        key = "bi" if sel == "Biaya" else "kun"
+        for b in range(4):
+            fig.add_trace(go.Bar(x=labs, y=T[f"{key}{b}"], name=BN[b], marker_color=BC[b]))
+        fig.update_layout(barmode="stack")
+    fig.update_xaxes(categoryorder="array", categoryarray=labs)
+    fig.update_layout(height=420, margin=dict(t=10), legend=dict(orientation="h", y=-0.15))
+    st.plotly_chart(fig, width="stretch")
+    T["mom"] = T.bi.pct_change().replace([np.inf, -np.inf], np.nan)
+    T["uc"] = (T.bi / T.kun.replace(0, np.nan)).fillna(0)
+    st.subheader("Rekap Bulanan")
+    st.dataframe(T[["Bulan", "pes", "kas", "kun", "bi", "uc", "ut", "mom"]], hide_index=True, width="stretch",
+                 column_config={"pes": RP("Peserta"), "kas": RP("Kasus"), "kun": RP("Kunjungan"), "bi": RP("Biaya"),
+                                "uc": RP("Unit Cost"), "ut": NUM("Util /1.000", format="%.1f"),
+                                "mom": NUM("Δ Biaya MoM", format="percent")})
+
+
+def view_bmiv(L, C, b, m):
+    st.markdown(f"**{BN[b]}** — {BD[b]}")
+    Lb = L[L.b == b]
+    if Lb.empty:
+        st.info("Tidak ada data untuk kombinasi filter ini.")
+        return
+    Cb = C[C.b == b]
+    a = agg(Lb, m)
+    cols = st.columns(6 if b == 2 else 5)
+    cols[0].metric("Total Biaya", fR(a["bi"]), help=fF(a["bi"]))
+    cols[1].metric("Kunjungan / Episode", fN(a["kun"]))
+    cols[2].metric("Kasus", fN(a["kas"]))
+    cols[3].metric("Peserta", fN(a["pes"]))
+    cols[4].metric("Unit Cost", fF(a["uc"]))
+    if b == 2:
+        cols[5].metric("ALOS", f"{f1(Lb.los.mean())} hari", help=f"Total {fN(Lb.los.sum())} hari rawat")
+    G = Cb.groupby(["kode", "komponen"], as_index=False).agg(vol=("vol", "sum"), biaya=("biaya", "sum"))
+    G = G.sort_values("biaya", ascending=False)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Biaya per Komponen")
+        hbar(G.head(15), "biaya", "komponen", BC[b])
+    with c2:
+        if b == 2:
+            st.subheader("Distribusi ALOS (hari rawat)")
+            bins = [0, 3, 7, 10, 14, 10_000]
+            lab = ["1–3 hr", "4–7 hr", "8–10 hr", "11–14 hr", "15+ hr"]
+            cnt = pd.cut(Lb.los, bins, labels=lab).value_counts().reindex(lab, fill_value=0)
+            fig = go.Figure(go.Bar(x=lab, y=cnt.values, marker_color=BC[2]))
+            fig.update_layout(height=380, margin=dict(t=10), yaxis_title="Kasus")
+            st.plotly_chart(fig, width="stretch")
+        elif b == 1:
+            st.subheader("Kunjungan per Poli/Spesialisasi")
+            t = Lb.poli.value_counts().head(10).rename_axis("poli").reset_index(name="n")
+            hbar(t, "n", "poli", BC[1], fmt="n")
         else:
-            found[bmiv] = s
-    return found, missing
+            st.subheader("Top Diagnosa (biaya)")
+            t = Lb.groupby("diagnosa").total.sum().sort_values(ascending=False).head(10).reset_index()
+            hbar(t, "total", "diagnosa", BC[b])
+    st.subheader("Rincian Komponen")
+    G["pct"] = G.biaya / G.biaya.sum()
+    G["uc"] = (G.biaya / G.vol.replace(0, np.nan)).fillna(0)
+    st.dataframe(G.rename(columns={"kode": "Kode", "komponen": "Komponen"}), hide_index=True, width="stretch",
+                 column_config={"vol": RP("Volume"), "biaya": RP("Biaya"), "pct": NUM("% Biaya", format="percent"),
+                                "uc": RP("Unit Cost")})
+    if b == 2:
+        st.subheader("ALOS per Kelas Rawat")
+        K = Lb.groupby("kelas").agg(kasus=("id", "count"), hari=("los", "sum"), biaya=("total", "sum")).reset_index()
+        K["alos"] = K.hari / K.kasus
+        K["bpk"] = K.biaya / K.kasus
+        st.dataframe(K, hide_index=True, width="stretch",
+                     column_config={"kelas": "Kelas", "kasus": RP("Kasus"), "hari": RP("Hari Rawat"),
+                                    "alos": NUM("ALOS (hari)", format="%.1f"), "biaya": RP("Biaya"),
+                                    "bpk": RP("Biaya / Kasus")})
 
-def detect_header(df, max_rows=20):
-    best_row = 0
-    best_score = -1
-    keywords = ["tanggal", "date", "plkk", "faskes", "biaya", "cost", "kanwil", "cabang", "branch", "kpj", "case"]
-    for r in range(min(max_rows, len(df))):
-        vals = " ".join(str(v).lower() for v in df.iloc[r].tolist() if pd.notna(v))
-        score = sum(k in vals for k in keywords)
-        if score > best_score:
-            best_score = score
-            best_row = r
-    return best_row
 
-def clean_sheet(df):
-    h = detect_header(df)
-    out = df.iloc[h + 1:].copy()
-    out.columns = [str(x).strip() if pd.notna(x) else f"COL_{i}" for i, x in enumerate(df.iloc[h].tolist())]
-    out = out.reset_index(drop=True)
-    return out, h
+def view_plkk(L, m):
+    c1, c2 = st.columns(2)
+    basis = c1.selectbox("Basis perbandingan (apple-to-apple)", ["Semua layanan"] + BN)
+    metric = c2.selectbox("Metrik peringkat", ["Total Biaya", "Kunjungan (utilisasi)", "Unit Cost", "Cost per Case"])
+    X = L if basis == "Semua layanan" else L[L.b == BN.index(basis)]
+    if X.empty:
+        st.info("Tidak ada data.")
+        return
+    R = X.groupby("plkk").agg(pes=("kpj", "nunique"), kas=("case", "nunique"), kun=("id", "count"),
+                              bi=("total", "sum")).reset_index()
+    R["uc"], R["cpc"] = R.bi / R.kun, R.bi / R.kas
+    R["ut"] = R.kun / R.pes * 1000
+    key = {"Total Biaya": "bi", "Kunjungan (utilisasi)": "kun", "Unit Cost": "uc", "Cost per Case": "cpc"}[metric]
+    T = R[R.kun >= 5] if key in ("uc", "cpc") else R
+    T = T.sort_values(key, ascending=False).head(15)
+    st.subheader(f"Peringkat PLKK (Top 15) — {metric}")
+    st.caption("Bandingkan PLKK pada level layanan yang sama. Metrik rasio hanya untuk PLKK dengan ≥5 kunjungan.")
+    hbar(T, key, "plkk", "#0f766e", fmt="n" if key == "kun" else "rp")
+    st.subheader(f"Rekapitulasi PLKK ({len(R)} PLKK)")
+    st.dataframe(R.sort_values("bi", ascending=False), hide_index=True, width="stretch",
+                 column_config={"plkk": "PLKK", "pes": RP("Peserta"), "kas": RP("Kasus"), "kun": RP("Kunjungan"),
+                                "bi": RP("Total Biaya"), "uc": RP("Unit Cost"), "cpc": RP("Cost per Case"),
+                                "ut": NUM("Util /1.000", format="%.1f")})
 
-def find_col(df, names):
-    norm = {str(c).strip().lower(): c for c in df.columns}
-    for name in names:
-        if name.lower() in norm:
-            return norm[name.lower()]
-    for c in df.columns:
-        lc = str(c).lower()
-        if any(name.lower() in lc for name in names):
-            return c
-    return None
 
-def get_series(df, col, default=""):
-    if col is None or col not in df.columns:
-        return pd.Series([default] * len(df), index=df.index)
-    return df[col]
+def view_lbst(L, C, pers):
+    st.caption("Sheet LB-ST tidak tersedia pada berkas; ditampilkan rekap layanan aktual per komponen × bulan "
+               "dari BMIV-01 s.d. BMIV-04 (fallback).")
+    mode = st.radio("Tampilkan", ["Biaya (Rp)", "Volume"], horizontal=True)
+    val = "biaya" if mode.startswith("Biaya") else "vol"
+    X = C.merge(L[["id", "periode"]], on="id")
+    P = X.pivot_table(index=["b", "komponen"], columns="periode", values=val, aggfunc="sum", fill_value=0)
+    P = P.reindex(columns=pers, fill_value=0)
+    P["Total"] = P.sum(axis=1)
+    P = P.reset_index()
+    P.insert(0, "Layanan", P.b.map(lambda i: BS[i]))
+    P = P.drop(columns="b").rename(columns={"komponen": "Komponen", **{p: ml(p) for p in pers}})
+    tot = P.drop(columns=["Layanan", "Komponen"]).sum()
+    P = pd.concat([P, pd.DataFrame([{"Layanan": "Total", "Komponen": "", **tot.to_dict()}])], ignore_index=True)
+    st.dataframe(P, hide_index=True, width="stretch",
+                 column_config={c: NUM(c, format="localized") for c in P.columns[2:]})
 
-def prepare_sheet(df, bmiv):
-    header_row = detect_header(df)
-    header_values = [str(x).strip() if pd.notna(x) else f"COL_{i}"
-                     for i, x in enumerate(df.iloc[header_row].tolist())]
-    data = df.iloc[header_row + 1:].copy().reset_index(drop=True)
-    data.columns = list(range(len(data.columns)))
 
-    def header_col(names):
-        for i, h in enumerate(header_values):
-            lh = h.lower()
-            if any(n.lower() == lh or n.lower() in lh for n in names):
-                return i
-        return None
+def view_uc(L, C, m):
+    basis = st.selectbox("Kelompok", ["Semua BMIV"] + BN)
+    X = L if basis == "Semua BMIV" else L[L.b == BN.index(basis)]
+    Cx = C[C.id.isin(X.id)]
+    a = agg(X, m)
+    k = st.columns(4)
+    k[0].metric("Unit Cost", fF(a["uc"]), help="Biaya / kunjungan")
+    k[1].metric("Cost per Case", fF(a["cpc"]))
+    k[2].metric("PMPM", fF(a["pm"]), help=f"{m} bulan")
+    k[3].metric("Utilisasi /1.000 peserta", f1(a["ut"]), help="Kunjungan per 1.000 peserta")
+    G = Cx.groupby(["b", "komponen", "label"], as_index=False).agg(vol=("vol", "sum"), biaya=("biaya", "sum"))
+    G["pct"] = G.biaya / G.biaya.sum() if G.biaya.sum() else 0
+    G["uc"] = (G.biaya / G.vol.replace(0, np.nan)).fillna(0)
+    G["ut"] = G.vol / a["pes"] * 1000 if a["pes"] else 0
+    G["pm"] = G.biaya / (a["pes"] * m) if a["pes"] else 0
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Top 10 PMPM per Komponen")
+        hbar(G.sort_values("pm", ascending=False).head(10), "pm", "label", "#0f766e")
+    with c2:
+        st.subheader("Top 10 Unit Cost per Komponen")
+        st.caption("Komponen dengan volume ≥3")
+        hbar(G[G.vol >= 3].sort_values("uc", ascending=False).head(10), "uc", "label", "#a855f7")
+    st.subheader("Unit Cost, Utilisasi & PMPM per Komponen")
+    out = G.sort_values("biaya", ascending=False).copy()
+    out["Layanan"] = out.b.map(lambda i: BS[i])
+    st.dataframe(out[["Layanan", "komponen", "vol", "biaya", "pct", "uc", "ut", "pm"]], hide_index=True,
+                 width="stretch",
+                 column_config={"komponen": "Komponen", "vol": RP("Volume"), "biaya": RP("Biaya"),
+                                "pct": NUM("% Proporsi", format="percent"), "uc": RP("Unit Cost"),
+                                "ut": NUM("Util /1.000", format="%.1f"), "pm": RP("PMPM")})
 
-    date_col = header_col(["tanggal", "tgl pelayanan", "date"])
-    plkk_col = header_col(["plkk", "faskes", "nama plkk", "provider"])
-    branch_col = header_col(["cabang", "branch", "kantor cabang", "wilayah"])
-    kanwil_col = header_col(["kanwil", "kantor wilayah"])
-    case_col = header_col(["case id", "case_id", "kasus", "id kasus"])
-    kpj_col = header_col(["kpj", "peserta", "participant", "member"])
-    case_type_col = header_col(["case type", "jenis kasus"])
-    sector_col = header_col(["sektor usaha", "sector", "sektor"])
-    service_type_col = header_col(["service type", "jenis layanan", "jenis pelayanan"])
 
-    if date_col is None:
-        date_col = DATE_COL[bmiv]
-    if plkk_col is None:
-        plkk_col = PLKK_COL[bmiv]
-    if branch_col is None:
-        branch_col = BRANCH_COL[bmiv]
+def view_case(E, C):
+    st.caption("Case Explorer menelusuri seluruh data (tidak terpengaruh filter sidebar).")
+    top = E.groupby("case").total.sum().sort_values(ascending=False).head(12)
+    cases = sorted(E["case"].unique())
+    sel = st.selectbox("Case ID (ketik untuk mencari)", cases, index=None, placeholder="mis. " + cases[0])
+    if sel is None:
+        st.markdown("**Kasus berbiaya tertinggi:**")
+        st.dataframe(top.rename("Total Biaya").reset_index().rename(columns={"case": "Case ID"}), hide_index=True,
+                     column_config={"Total Biaya": RP("Total Biaya")})
+        return
+    X = E[E["case"] == sel].sort_values(["tgl", "b"])
+    cx = C[C.id.isin(X.id)]
+    days = (X.tgl.max() - X.tgl.min()).days
+    k = st.columns(6)
+    k[0].metric("Total Biaya", fF(X.total.sum()))
+    k[1].metric("Layanan / Episode", len(X))
+    k[2].metric("PLKK Terlibat", X.plkk.nunique())
+    k[3].metric("Rentang", f"{days} hari", help=f"{X.tgl.min():%Y-%m-%d} → {X.tgl.max():%Y-%m-%d}")
+    k[4].metric("Jenis Kasus", X.jenis_kasus.iloc[0], help=X.sektor.iloc[0])
+    k[5].metric("Diagnosa", X.diagnosa.iloc[0], help="KPJ " + X.kpj.iloc[0])
 
-    def col_series(idx):
-        if idx is None or idx not in data.columns:
-            return pd.Series([""] * len(data), index=data.index)
-        return data[idx]
+    def cn(eid):
+        z = cx[cx.id == eid]
+        return ", ".join(f"{r.komponen}{' ×' + fN(r.vol) if r.vol > 1 else ''}" for r in z.itertuples())
 
-    data["_date"] = pd.to_datetime(col_series(date_col), errors="coerce")
-    data["_plkk"] = col_series(plkk_col).astype(str).str.strip()
-    data["_branch"] = col_series(branch_col).astype(str).str.strip()
-    data["_kanwil"] = col_series(kanwil_col).astype(str).str.strip()
-    data["_case"] = col_series(case_col).astype(str).str.strip()
-    data["_kpj"] = col_series(kpj_col).astype(str).str.strip()
-    data["_case_type"] = col_series(case_type_col).astype(str).str.strip()
-    data["_sector"] = col_series(sector_col).astype(str).str.strip()
-    data["_service_type"] = col_series(service_type_col).astype(str).str.strip()
-    data["_bmiv"] = bmiv
+    st.subheader("Timeline / Journey Layanan")
+    html = ""
+    for e in X.itertuples():
+        extra = f" · {e.los} hari rawat" if e.b == 2 else ""
+        html += (f"<div style='border-left:4px solid {BC[e.b]};padding:2px 0 2px 12px;margin:0 0 12px 6px'>"
+                 f"<span style='background:{BC[e.b]};color:#fff;border-radius:99px;padding:1px 9px;font-size:12px'>{BS[e.b]}</span> "
+                 f"<b>{e.tgl:%Y-%m-%d}</b> · {e.plkk}<br><span style='opacity:.7'>{cn(e.id) or '–'}{extra}</span><br>"
+                 f"<b>{fF(e.total)}</b></div>")
+    st.markdown(html, unsafe_allow_html=True)
+    st.subheader("Detail Baris Data")
+    D = pd.DataFrame({"Tanggal": X.tgl.dt.strftime("%Y-%m-%d"), "Layanan": X.b.map(lambda i: BN[i]), "PLKK": X.plkk,
+                      "Kunjungan ke": X.kunj_ke.replace(0, np.nan), "Komponen": [cn(i) for i in X.id],
+                      "Biaya Disetujui": X.total})
+    st.dataframe(D, hide_index=True, width="stretch", column_config={"Biaya Disetujui": RP("Biaya Disetujui")})
 
-    service_cols = set()
-    for _, _, _, volcols, costcols in SERVICE_MAP[{
-        "BMIV-01":"RJTP", "BMIV-02":"RJTL",
-        "BMIV-03":"RANAP", "BMIV-04":"KHUSUS"
-    }[bmiv]]:
-        service_cols.update(volcols or [])
-        if costcols is not None:
-            service_cols.update(costcols if isinstance(costcols, list) else [costcols])
-    for c in sorted(service_cols):
-        if c in data.columns:
-            data[f"__num_{c}"] = pd.to_numeric(data[c], errors="coerce").fillna(0.0)
 
-    data["__service_volume_total"] = 0.0
-    data["__service_cost_total"] = 0.0
-    for _, _, _, volcols, costcols in SERVICE_MAP[{
-        "BMIV-01":"RJTP", "BMIV-02":"RJTL",
-        "BMIV-03":"RANAP", "BMIV-04":"KHUSUS"
-    }[bmiv]]:
-        vcols = [f"__num_{c}" for c in (volcols or []) if f"__num_{c}" in data.columns]
-        if vcols:
-            data["__service_volume_total"] += data[vcols].sum(axis=1)
-        if costcols is not None:
-            ccols = [f"__num_{c}" for c in (costcols if isinstance(costcols, list) else [costcols]) if f"__num_{c}" in data.columns]
-            if ccols:
-                data["__service_cost_total"] += data[ccols].sum(axis=1)
-
-    data.attrs["header_values"] = header_values
-    data.attrs["header_row"] = header_row
-    return data, header_row
-
-def value_sum_positional(df, cols):
-    valid = [f"__num_{c}" for c in cols if f"__num_{c}" in df.columns]
-    if valid:
-        return float(df[valid].sum(axis=1).sum())
-    raw_valid = [c for c in cols if c in df.columns]
-    if not raw_valid:
-        return 0.0
-    return float(df[raw_valid].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1).sum())
-
-def calc_service_table(prepared, group_filter="Semua"):
-    rows = []
-    groups = SERVICE_MAP if group_filter == "Semua" else {group_filter: SERVICE_MAP[group_filter]}
-    for group, items in groups.items():
-        sheet_name = prepared["sheet_names"].get(BMIV_LABEL[group])
-        raw = prepared["raw"].get(BMIV_LABEL[group])
-        if raw is None:
-            continue
-        raw = raw.copy()
-        for name, unit, bmiv, volcols, costcols in items:
-            vol = value_sum_positional(raw, volcols)
-            cost = 0.0 if costcols is None else value_sum_positional(raw, costcols if isinstance(costcols, list) else [costcols])
-            rows.append({
-                "Kelompok": group,
-                "BMIV": bmiv,
-                "Komponen Layanan": name,
-                "Satuan": unit,
-                "Volume": vol,
-                "Biaya (Rp)": cost,
-                "Unit Cost (Rp)": cost / vol if vol > 0 else np.nan,
-            })
-    return pd.DataFrame(rows)
-
-def filter_raw(prepared, bmiv_filter="Semua", plkk="Semua PLKK",
-               kanwil="Semua Kanwil", branch="Semua Cabang",
-               case_type="Semua Jenis Kasus", sector="Semua Sektor",
-               service_type="Semua Jenis Layanan", start_date=None, end_date=None):
-    frames = []
-    bmivs = list(prepared["raw"].keys()) if bmiv_filter == "Semua BMIV" else [bmiv_filter]
-    for bmiv in bmivs:
-        d = prepared["raw"].get(bmiv)
-        if d is None or d.empty:
-            continue
-        x = d
-        if start_date is not None:
-            x = x[x["_date"] >= pd.Timestamp(start_date)]
-        if end_date is not None:
-            x = x[x["_date"] <= pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)]
-        if plkk != "Semua PLKK":
-            x = x[x["_plkk"].eq(plkk)]
-        if kanwil != "Semua Kanwil":
-            x = x[x["_kanwil"].eq(kanwil)]
-        if branch != "Semua Cabang":
-            x = x[x["_branch"].eq(branch)]
-        if case_type != "Semua Jenis Kasus":
-            x = x[x["_case_type"].eq(case_type)]
-        if sector != "Semua Sektor":
-            x = x[x["_sector"].eq(sector)]
-        if service_type != "Semua Jenis Layanan":
-            x = x[x["_service_type"].eq(service_type)]
-        frames.append(x)
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
-
-def filtered_services(prepared, filters):
-    rows = []
-    groups = SERVICE_MAP if filters["group"] == "Semua" else {filters["group"]: SERVICE_MAP[filters["group"]]}
-    for group, items in groups.items():
-        bmiv = BMIV_LABEL[group]
-        raw = prepared["raw"].get(bmiv)
-        if raw is None:
-            continue
-        x = raw
-        if filters["start_date"] is not None:
-            x = x[x["_date"] >= pd.Timestamp(filters["start_date"])]
-        if filters["end_date"] is not None:
-            x = x[x["_date"] <= pd.Timestamp(filters["end_date"]) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)]
-        for colname, val in [
-            ("_plkk", filters["plkk"]),
-            ("_kanwil", filters["kanwil"]),
-            ("_branch", filters["branch"]),
-            ("_case_type", filters["case_type"]),
-            ("_sector", filters["sector"]),
-            ("_service_type", filters["service_type"]),
-        ]:
-            if val != "Semua " + {
-                "_plkk":"PLKK", "_kanwil":"Kanwil", "_branch":"Cabang",
-                "_case_type":"Jenis Kasus", "_sector":"Sektor", "_service_type":"Jenis Layanan"
-            }[colname]:
-                x = x[x[colname].eq(val)]
-        for name, unit, _, volcols, costcols in items:
-            vol = value_sum_positional(x, volcols)
-            cost = 0.0 if costcols is None else value_sum_positional(x, costcols if isinstance(costcols, list) else [costcols])
-            rows.append({
-                "Kelompok": group, "BMIV": bmiv, "Komponen Layanan": name,
-                "Satuan": unit, "Volume": vol, "Biaya (Rp)": cost,
-                "Unit Cost (Rp)": cost / vol if vol > 0 else np.nan,
-            })
-    return pd.DataFrame(rows)
-
-def build_service_by_month(filtered_data, start_date, end_date):
-    """Trend bulanan dengan skala Volume dan Utilisasi standar (jumlah kunjungan/kasus)
-
-    sehingga nilainya proporsional, tidak membengkak ke angka jutaan (M),
-    dan dihitung secara independen dari Biaya.
-    """
-    months = pd.date_range(
-        pd.Timestamp(start_date).replace(day=1),
-        pd.Timestamp(end_date).replace(day=1),
-        freq="MS",
-    )
-    columns = ["Bulan", "Biaya", "Volume", "Utilisasi"]
-    if filtered_data is None or filtered_data.empty:
-        return pd.DataFrame({
-            "Bulan": months,
-            "Biaya": 0.0,
-            "Volume": 0.0,
-            "Utilisasi": 0.0,
-        })[columns]
-
-    x = filtered_data.loc[filtered_data["_date"].notna()].copy()
-    if x.empty:
-        return pd.DataFrame({
-            "Bulan": months,
-            "Biaya": 0.0,
-            "Volume": 0.0,
-            "Utilisasi": 0.0,
-        })[columns]
-
-    for col in ["__service_cost_total"]:
-        if col not in x.columns:
-            x[col] = 0.0
-        x[col] = pd.to_numeric(x[col], errors="coerce").fillna(0.0)
-
-    x["Bulan"] = x["_date"].dt.to_period("M").dt.to_timestamp()
-    
-    agg = (
-        x.groupby("Bulan", as_index=False)
-        .agg(
-            Biaya=("__service_cost_total", "sum"),
-            Volume=("_date", "count"),
-            Utilisasi=("_case", "nunique"),
-        )
-    )
-
-    out = pd.DataFrame({"Bulan": months}).merge(agg, on="Bulan", how="left")
-    for col in ["Biaya", "Volume", "Utilisasi"]:
-        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
-    return out[columns]
-
-def distinct_count(d, col):
-    if d.empty or col not in d.columns:
-        return 0
-    s = d[col].replace({"": np.nan, "nan": np.nan}).dropna()
-    return int(s.nunique())
-
-def case_metrics(d):
-    peserta = distinct_count(d, "_kpj")
-    kasus = distinct_count(d, "_case")
-    kunjungan = len(d)
-    return peserta, kasus, kunjungan
-
-def rupiah(x, decimals=0):
-    if pd.isna(x):
-        return "-"
-    if decimals:
-        return f"Rp {x:,.{decimals}f}"
-    return f"Rp {x:,.0f}"
-
-def kpi(col, label, value):
-    col.markdown(
-        f'<div class="kpi"><div class="v">{value}</div><div class="l">{label}</div></div>',
-        unsafe_allow_html=True
-    )
-
-def calculate_plkk_performance(prepared, bmiv_rank, filters):
-    x = prepared["raw"].get(bmiv_rank)
-    if x is None or x.empty:
-        return pd.DataFrame()
-
-    mask = pd.Series(True, index=x.index)
-    if filters["start_date"] is not None:
-        mask &= x["_date"] >= pd.Timestamp(filters["start_date"])
-    if filters["end_date"] is not None:
-        mask &= x["_date"] <= pd.Timestamp(filters["end_date"]) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-    for colname, val, default in [
-        ("_plkk", filters["plkk"], "Semua PLKK"),
-        ("_kanwil", filters["kanwil"], "Semua Kanwil"),
-        ("_branch", filters["branch"], "Semua Cabang"),
-        ("_case_type", filters["case_type"], "Semua Jenis Kasus"),
-        ("_sector", filters["sector"], "Semua Sektor"),
-        ("_service_type", filters["service_type"], "Semua Jenis Layanan"),
-    ]:
-        if val != default:
-            mask &= x[colname].eq(val)
-    x = x.loc[mask]
-    if x.empty:
-        return pd.DataFrame()
-
-    def nunique_valid(z):
-        return z.replace({"": np.nan, "nan": np.nan}).nunique()
-
-    base = x.groupby("_plkk", sort=False).agg(
-        Kunjungan=("_plkk", "size"),
-        Peserta=("_kpj", nunique_valid),
-        Kasus=("_case", nunique_valid),
-        Biaya=("__service_cost_total", "sum"),
-        Utilisasi=("__service_volume_total", "sum"),
-    ).reset_index().rename(columns={"_plkk": "PLKK"})
-    base["Unit Cost"] = np.where(base["Utilisasi"] > 0, base["Biaya"] / base["Utilisasi"], np.nan)
-    base["Cost per Case"] = np.where(base["Kasus"] > 0, base["Biaya"] / base["Kasus"], np.nan)
-    return base
-
-# ============================================================
-# HEADER + UPLOAD
-# ============================================================
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
 st.title("UR Dashboard • PLKK")
 st.caption("Monitoring biaya, utilisasi, unit cost, PMPM, kinerja PLKK, dan case-level analysis.")
 
-with st.sidebar:
-    st.header("📁 Upload Data")
-    uploaded = st.file_uploader(
-        "Upload Excel dengan format BMIV yang sama",
-        type=["xlsx"],
-        help="Nama file dan suffix sheet boleh berbeda. Struktur kolom BMIV harus tetap konsisten."
-    )
-
-if uploaded is None:
+st.sidebar.markdown("## 📁 Upload Data")
+up = st.sidebar.file_uploader("Upload Excel dengan format BMIV yang sama", type=["xlsx"])
+if up is None:
     st.info("Upload workbook Excel untuk mulai membuat dashboard.")
     st.stop()
 
-try:
-    file_bytes = uploaded.getvalue()
-    dataset_key = hash(file_bytes)
-
-    if st.session_state.get("_dataset_key") != dataset_key:
-        sheets = load_excel_data(file_bytes)
-        sheet_map, missing = locate_bmiv_sheets(sheets)
-        if missing:
-            st.error("Sheet BMIV berikut tidak ditemukan: " + ", ".join(missing))
-            st.caption("Contoh yang diterima: BMIV-01, BMIV-01_Dummy, BMIV-01_Juni2026, dst.")
-            st.stop()
-
-        raw = {}
-        header_info = {}
-        for bmiv, sheet_name in sheet_map.items():
-            raw[bmiv], header_info[bmiv] = prepare_sheet(sheets[sheet_name], bmiv)
-
-        prepared = {"raw": raw, "sheet_names": sheet_map, "header_info": header_info}
-        st.session_state["_dataset_key"] = dataset_key
-        st.session_state["_prepared"] = prepared
-        st.session_state["_sheets"] = sheets
-        for k in ["_filter_cache", "_trend_cache", "_plkk_cache", "_all_data", "_all_data_key"]:
-            st.session_state.pop(k, None)
-    else:
-        prepared = st.session_state["_prepared"]
-        sheets = st.session_state["_sheets"]
-
-except Exception as e:
-    st.error(f"Gagal membaca workbook: {e}")
-    st.exception(e)
+with st.spinner("Membaca & memetakan workbook BMIV…"):
+    E, C, warns = load(up.getvalue())
+for w in warns:
+    st.warning(w)
+if E is None:
     st.stop()
 
-raw = prepared["raw"]
-
-# ============================================================
-# GLOBAL FILTER OPTIONS
-# ============================================================
-if st.session_state.get("_all_data_key") != st.session_state.get("_dataset_key"):
-    st.session_state["_all_data"] = pd.concat(raw.values(), ignore_index=True)
-    st.session_state["_all_data_key"] = st.session_state.get("_dataset_key")
-all_data = st.session_state["_all_data"]
-valid_dates = all_data["_date"].dropna()
-
-if valid_dates.empty:
-    min_date = pd.Timestamp.today().replace(day=1)
-    max_date = min_date
+st.sidebar.markdown("---\n## 🔎 Filter Global")
+dmin, dmax = E.tgl.min().date(), E.tgl.max().date()
+rng = st.sidebar.date_input("Periode Tanggal", (dmin, dmax), min_value=dmin, max_value=dmax)
+if isinstance(rng, (tuple, list)) and len(rng) == 2:
+    d0, d1 = rng
 else:
-    min_date = valid_dates.min().normalize()
-    max_date = valid_dates.max().normalize()
-
-with st.sidebar:
-    st.markdown("---")
-    st.header("🎛️ Filter Dashboard")
-
-    date_range = st.date_input(
-        "Periode",
-        value=(min_date.date(), max_date.date()),
-        min_value=min_date.date(),
-        max_value=max_date.date(),
-    )
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start_date, end_date = date_range
+    d0 = d1 = rng[0] if isinstance(rng, (tuple, list)) else rng
+mask = (E.tgl.dt.date >= d0) & (E.tgl.dt.date <= d1)
+for label, col, opts in [("Kanwil", "kanwil", None), ("Cabang", "cabang", None), ("PLKK", "plkk", None),
+                         ("Jenis Layanan", "b", BN), ("Jenis Kasus", "jenis_kasus", None),
+                         ("Sektor Usaha", "sektor", None)]:
+    if opts:
+        pick = st.sidebar.multiselect(label, range(4), format_func=lambda i: BN[i])
     else:
-        start_date = end_date = date_range
+        pick = st.sidebar.multiselect(label, sorted(E[col].unique()))
+    if pick:
+        mask &= E[col].isin(pick)
+L = E[mask]
+Cf = C[C.id.isin(L.id)]
+st.sidebar.caption(f"{fN(len(L))} dari {fN(len(E))} baris terfilter")
 
-    bmiv_options = ["Semua BMIV"] + ["BMIV-01", "BMIV-02", "BMIV-03", "BMIV-04"]
-    selected_bmiv = st.selectbox("BMIV", bmiv_options)
+fm, tm = f"{d0:%Y-%m}", f"{d1:%Y-%m}"
+pers = [p for p in sorted(E.periode.unique()) if fm <= p <= tm]
+m = max(1, len(pers))
 
-    kanwil_values = sorted([x for x in all_data["_kanwil"].dropna().astype(str).unique() if x and x.lower() != "nan"])
-    branch_values = sorted([x for x in all_data["_branch"].dropna().astype(str).unique() if x and x.lower() != "nan"])
-    plkk_values = sorted([x for x in all_data["_plkk"].dropna().astype(str).unique() if x and x.lower() != "nan"])
-    case_values = sorted([x for x in all_data["_case_type"].dropna().astype(str).unique() if x and x.lower() != "nan"])
-    sector_values = sorted([x for x in all_data["_sector"].dropna().astype(str).unique() if x and x.lower() != "nan"])
-    service_values = sorted([x for x in all_data["_service_type"].dropna().astype(str).unique() if x and x.lower() != "nan"])
-
-    selected_kanwil = st.selectbox("Kanwil", ["Semua Kanwil"] + kanwil_values)
-    selected_branch = st.selectbox("Cabang", ["Semua Cabang"] + branch_values)
-    selected_plkk = st.selectbox("PLKK", ["Semua PLKK"] + plkk_values)
-    selected_service_type = st.selectbox("Jenis Layanan", ["Semua Jenis Layanan"] + service_values)
-    selected_case_type = st.selectbox("Jenis Kasus", ["Semua Jenis Kasus"] + case_values)
-    selected_sector = st.selectbox("Sektor Usaha", ["Semua Sektor"] + sector_values)
-
-filters = {
-    "bmiv": selected_bmiv,
-    "plkk": selected_plkk,
-    "kanwil": selected_kanwil,
-    "branch": selected_branch,
-    "case_type": selected_case_type,
-    "sector": selected_sector,
-    "service_type": selected_service_type,
-    "start_date": start_date,
-    "end_date": end_date,
-    "group": "Semua",
-}
-
-filter_key = (
-    selected_bmiv, selected_plkk, selected_kanwil, selected_branch,
-    selected_case_type, selected_sector, selected_service_type,
-    str(start_date), str(end_date)
-)
-
-_filter_cache = st.session_state.setdefault("_filter_cache", {})
-if filter_key in _filter_cache:
-    filtered, svc = _filter_cache[filter_key]
-else:
-    filtered = filter_raw(
-        prepared,
-        bmiv_filter=selected_bmiv,
-        plkk=selected_plkk,
-        kanwil=selected_kanwil,
-        branch=selected_branch,
-        case_type=selected_case_type,
-        sector=selected_sector,
-        service_type=selected_service_type,
-        start_date=start_date,
-        end_date=end_date,
-    )
-    svc = filtered_services(prepared, filters)
-    _filter_cache[filter_key] = (filtered, svc)
-    while len(_filter_cache) > 12:
-        _filter_cache.pop(next(iter(_filter_cache)))
-
-peserta, kasus, kunjungan = case_metrics(filtered)
-total_cost = float(svc["Biaya (Rp)"].sum()) if not svc.empty else 0.0
-total_volume = float(svc["Volume"].sum()) if not svc.empty else 0.0
-unit_cost = total_cost / total_volume if total_volume else np.nan
-
-tk = max(peserta, 1)
-pmpm = total_cost / tk / max((pd.Timestamp(end_date).to_period("M") - pd.Timestamp(start_date).to_period("M")).n + 1, 1)
-
-# ============================================================
-# NAVIGASI CEPAT — TAB KOTAK
-# ============================================================
-PAGES = [
-    "1. Executive Summary",
-    "2. Trend & Monitoring",
-    "3. BMIV-01",
-    "4. BMIV-02",
-    "5. BMIV-03",
-    "6. BMIV-04",
-    "7. PLKK Performance",
-    "8. LB-ST",
-    "9. Unit Cost & Per Kapita",
-    "10. Case Explorer",
-]
-
-if st.session_state.get("_active_page") not in PAGES:
-    st.session_state["_active_page"] = PAGES[0]
-
-st.markdown("""
-<style>
-div[data-testid="stButton"] > button {
-    border-radius: 4px !important;
-    min-height: 42px !important;
-    padding: 0.35rem 0.45rem !important;
-    font-size: 0.78rem !important;
-    font-weight: 650 !important;
-    white-space: normal !important;
-    line-height: 1.15 !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-for row_start in range(0, len(PAGES), 5):
-    row_pages = PAGES[row_start:row_start + 5]
-    cols = st.columns(5)
-    for i, page in enumerate(row_pages):
-        with cols[i]:
-            label = page.split(". ", 1)[1] if ". " in page else page
-            if st.button(label, key=f"nav_{row_start}_{i}"):
-                st.session_state["_active_page"] = page
-                rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
-                if rerun_fn is not None:
-                    rerun_fn()
-
-active_page = st.session_state["_active_page"]
-st.markdown("---")
-
-# ============================================================
-# 1 EXECUTIVE SUMMARY
-# ============================================================
-if active_page == PAGES[0]:
-    st.subheader("Executive Summary")
-    st.caption(f"Periode {pd.Timestamp(start_date).strftime('%d %b %Y')} – {pd.Timestamp(end_date).strftime('%d %b %Y')}")
-
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    kpi(k1, "Peserta", f"{peserta:,.0f}")
-    kpi(k2, "Kasus", f"{kasus:,.0f}")
-    kpi(k3, "Kunjungan", f"{kunjungan:,.0f}")
-    kpi(k4, "Biaya", rupiah(total_cost))
-    kpi(k5, "Unit Cost", rupiah(unit_cost))
-    kpi(k6, "PMPM", rupiah(pmpm, 2))
-
-    st.markdown("")
-    left, right = st.columns(2)
-
-    with left:
-        st.markdown('<div class="section-title">Komposisi Biaya per BMIV</div>', unsafe_allow_html=True)
-        if svc.empty or svc["Biaya (Rp)"].sum() <= 0:
-            st.info("Tidak ada data biaya pada filter.")
-        else:
-            cost_bmiv = svc.groupby("BMIV", as_index=False)["Biaya (Rp)"].sum()
-            fig = px.pie(cost_bmiv, names="BMIV", values="Biaya (Rp)", hole=.48)
-            fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10))
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-    with right:
-        st.markdown('<div class="section-title">Top 10 Komponen berdasarkan Biaya</div>', unsafe_allow_html=True)
-        top_cost = svc.sort_values("Biaya (Rp)", ascending=False).head(10)
-        fig = px.bar(top_cost.sort_values("Biaya (Rp)"), x="Biaya (Rp)", y="Komponen Layanan", orientation="h")
-        fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="")
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-# ============================================================
-# 2 TREND & MONITORING
-# ============================================================
-if active_page == PAGES[1]:
-    st.subheader("Trend & Monitoring")
-    metric = st.radio("Tampilkan", ["Biaya", "Volume", "Utilisasi"], horizontal=True)
-    trend_key = (filter_key, "trend")
-    _trend_cache = st.session_state.setdefault("_trend_cache", {})
-    if trend_key in _trend_cache:
-        trend = _trend_cache[trend_key]
-    else:
-        trend = build_service_by_month(filtered, start_date, end_date)
-        _trend_cache[trend_key] = trend
-        while len(_trend_cache) > 12:
-            _trend_cache.pop(next(iter(_trend_cache)))
-
-    if trend.empty:
-        st.info("Tidak ada data pada periode/filter yang dipilih.")
-    else:
-        ycol = "Biaya" if metric == "Biaya" else ("Volume" if metric == "Volume" else "Utilisasi")
-        month_vals = trend["Bulan"].tolist()
-        month_labels = [pd.Timestamp(x).strftime("%b %Y") for x in month_vals]
-
-        # Grafik garis atas dipertahankan (grafik batang bawah telah dihapus)
-        fig = px.line(trend, x="Bulan", y=ycol, markers=True)
-        fig.update_xaxes(
-            tickmode="array",
-            tickvals=month_vals,
-            ticktext=month_labels,
-            tickangle=-45,
-            rangeslider_visible=False,
-        )
-        fig.update_layout(
-            height=450,
-            xaxis_title="Bulan",
-            yaxis_title=metric,
-            margin=dict(l=45, r=20, t=45, b=85),
-        )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-# ============================================================
-# BMIV TABS
-# ============================================================
-def render_bmiv_tab(page_name, group, title, inpatient=False):
-    if active_page != page_name:
-        return
-    st.subheader(title)
-    sub = svc[svc["Kelompok"].eq(group)].copy()
-
-    if sub.empty:
-        st.info("Tidak ada data pada filter yang dipilih.")
-        return
-
-    c1, c2 = st.columns(2)
-
-    with c1:
-        util = sub.groupby("Komponen Layanan", as_index=False)["Volume"].sum().sort_values("Volume", ascending=False)
-        fig = px.pie(util, names="Komponen Layanan", values="Volume", hole=.45,
-                     title="Komposisi Utilisasi per Layanan")
-        fig.update_layout(height=380)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-    with c2:
-        top = sub.sort_values("Volume", ascending=False).head(10).sort_values("Volume")
-        fig = px.bar(top, x="Volume", y="Komponen Layanan", orientation="h",
-                     title="Top 10 Layanan berdasarkan Volume")
-        fig.update_layout(height=380, yaxis_title="")
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-    c3, c4 = st.columns(2)
-
-    with c3:
-        cost = sub.groupby("Komponen Layanan", as_index=False)["Biaya (Rp)"].sum().sort_values("Biaya (Rp)", ascending=False)
-        fig = px.bar(cost, x="Biaya (Rp)", y="Komponen Layanan", orientation="h",
-                     title="Komposisi Biaya" + (" Rawat Inap" if inpatient else " per Layanan"))
-        fig.update_layout(height=400, yaxis_title="")
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-    with c4:
-        if inpatient:
-            d = filtered[filtered["_bmiv"].eq("BMIV-03")].copy()
-            alos_col = find_col(d, ["alos", "lama rawat", "length of stay", "los"])
-            if alos_col is not None and not d.empty:
-                alos = pd.to_numeric(d[alos_col], errors="coerce").dropna()
-                if not alos.empty:
-                    fig = px.histogram(alos, x=alos_col, nbins=15, title="Distribusi ALOS")
-                    fig.update_layout(height=400)
-                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-                else:
-                    st.info("Kolom ALOS tersedia tetapi tidak berisi angka.")
-            else:
-                st.info("Kolom ALOS/Lama Rawat tidak tersedia pada workbook ini.")
-
-            cost_case = total_cost / kasus if kasus else np.nan
-            st.metric("Cost per Case", rupiah(cost_case))
-        else:
-            scatter = sub[sub["Volume"] > 0].copy()
-            fig = px.scatter(
-                scatter, x="Volume", y="Unit Cost (Rp)",
-                size="Biaya (Rp)", hover_name="Komponen Layanan",
-                title="Volume vs Unit Cost"
-            )
-            fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-render_bmiv_tab(PAGES[2], "RJTP", "BMIV-01 · Rawat Jalan Tingkat Pertama")
-render_bmiv_tab(PAGES[3], "RJTL", "BMIV-02 · Rawat Jalan Tingkat Lanjutan")
-render_bmiv_tab(PAGES[4], "RANAP", "BMIV-03 · Rawat Inap", inpatient=True)
-render_bmiv_tab(PAGES[5], "KHUSUS", "BMIV-04 · Pelayanan Khusus & Alat Bantu")
-
-# ============================================================
-# 7 PLKK PERFORMANCE
-# ============================================================
-if active_page == PAGES[6]:
-    st.subheader("PLKK Performance")
-    st.caption("Ranking PLKK mengikuti BMIV yang dipilih. Pilih satu BMIV untuk perbandingan PLKK yang apple-to-apple.")
-
-    bmiv_rank = st.selectbox(
-        "BMIV untuk Ranking PLKK",
-        ["BMIV-01", "BMIV-02", "BMIV-03", "BMIV-04"],
-        index=0 if selected_bmiv == "Semua BMIV" else ["BMIV-01","BMIV-02","BMIV-03","BMIV-04"].index(selected_bmiv),
-    )
-    plkk_key = (filter_key, bmiv_rank, "plkk")
-    _plkk_cache = st.session_state.setdefault("_plkk_cache", {})
-    if plkk_key in _plkk_cache:
-        base = _plkk_cache[plkk_key]
-    else:
-        base = calculate_plkk_performance(prepared, bmiv_rank, filters)
-        _plkk_cache[plkk_key] = base
-        while len(_plkk_cache) > 12:
-            _plkk_cache.pop(next(iter(_plkk_cache)))
-
-    if base.empty:
-        st.info("Tidak ada data PLKK pada filter.")
-    else:
-        a, b, c = st.columns(3)
-        with a:
-            top = base.nlargest(10, "Biaya").sort_values("Biaya")
-            st.plotly_chart(px.bar(top, x="Biaya", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Total Biaya"), use_container_width=True)
-        with b:
-            top = base.nlargest(10, "Utilisasi").sort_values("Utilisasi")
-            st.plotly_chart(px.bar(top, x="Utilisasi", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Utilisasi"), use_container_width=True)
-        with c:
-            top = base[base["Unit Cost"].notna()].nlargest(10, "Unit Cost").sort_values("Unit Cost")
-            st.plotly_chart(px.bar(top, x="Unit Cost", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Unit Cost"), use_container_width=True)
-
-        topcase = base.nlargest(10, "Cost per Case").sort_values("Cost per Case")
-        st.plotly_chart(px.bar(topcase, x="Cost per Case", y="PLKK", orientation="h", title="Cost per Case per PLKK"), use_container_width=True)
-
-        st.dataframe(
-            base.sort_values("Biaya", ascending=False).style.format({
-                "Kunjungan": "{:,.0f}", "Utilisasi": "{:,.0f}", "Peserta": "{:,.0f}", "Kasus": "{:,.0f}",
-                "Biaya": "Rp {:,.0f}", "Unit Cost": "Rp {:,.0f}", "Cost per Case": "Rp {:,.0f}"
-            }),
-            use_container_width=True, height=500
-        )
-
-# ============================================================
-# 8 LB-ST
-# ============================================================
-if active_page == PAGES[7]:
-    st.subheader("LB-ST")
-    lbst_sheet = find_sheet(sheets, "LB-ST")
-    if lbst_sheet:
-        st.caption(f"Membaca sheet: {lbst_sheet}")
-        st.dataframe(sheets[lbst_sheet], use_container_width=True, height=600)
-    else:
-        st.info("Sheet LB-ST tidak ditemukan. Ditampilkan rekap layanan aktual sebagai fallback.")
-        st.dataframe(
-            svc[["BMIV","Kelompok","Komponen Layanan","Satuan","Volume","Biaya (Rp)","Unit Cost (Rp)"]]
-            .style.format({"Volume":"{:,.0f}", "Biaya (Rp)":"Rp {:,.0f}", "Unit Cost (Rp)":"Rp {:,.0f}"}),
-            use_container_width=True, height=600
-        )
-
-# ============================================================
-# 9 UNIT COST & PER KAPITA
-# ============================================================
-if active_page == PAGES[8]:
-    st.subheader("Unit Cost & Per Kapita")
-    uc = svc.copy()
-    uc["Utilisasi / 1.000 TK"] = np.where(tk > 0, uc["Volume"] / tk * 1000, np.nan)
-    uc["PMPM"] = np.where(tk > 0, uc["Biaya (Rp)"] / tk / max((pd.Timestamp(end_date).to_period("M") - pd.Timestamp(start_date).to_period("M")).n + 1,1), np.nan)
-    uc["% Biaya"] = np.where(total_cost > 0, uc["Biaya (Rp)"] / total_cost, np.nan)
-    uc.insert(0, "No", range(1, len(uc)+1))
-
-    st.dataframe(
-        uc[["No","BMIV","Kelompok","Komponen Layanan","Satuan","Volume","Biaya (Rp)","Unit Cost (Rp)","Utilisasi / 1.000 TK","PMPM","% Biaya"]]
-        .style.format({
-            "Volume":"{:,.0f}", "Biaya (Rp)":"Rp {:,.0f}", "Unit Cost (Rp)":"Rp {:,.0f}",
-            "Utilisasi / 1.000 TK":"{:,.2f}", "PMPM":"Rp {:,.2f}", "% Biaya":"{:.1%}"
-        }),
-        use_container_width=True, height=550
-    )
-
-    c1, c2 = st.columns(2)
-    with c1:
-        topuc = uc[uc["Unit Cost (Rp)"].notna()].nlargest(10, "Unit Cost (Rp)").sort_values("Unit Cost (Rp)")
-        st.plotly_chart(px.bar(topuc, x="Unit Cost (Rp)", y="Komponen Layanan", orientation="h", title="Unit Cost per Komponen"), use_container_width=True)
-    with c2:
-        scatter = uc[uc["Unit Cost (Rp)"].notna() & (uc["Volume"] > 0)]
-        st.plotly_chart(px.scatter(scatter, x="Volume", y="Unit Cost (Rp)", size="Biaya (Rp)", hover_name="Komponen Layanan", title="Volume vs Unit Cost"), use_container_width=True)
-
-# ============================================================
-# 10 CASE EXPLORER
-# ============================================================
-if active_page == PAGES[9]:
-    st.subheader("Case Explorer")
-    if filtered.empty:
-        st.info("Tidak ada case pada filter yang dipilih.")
-    else:
-        case_ids = sorted([x for x in filtered["_case"].dropna().astype(str).unique() if x and x.lower() != "nan"])
-        if not case_ids:
-            st.info("Kolom Case ID tidak tersedia/berisi kosong pada workbook ini.")
-        else:
-            selected_case = st.selectbox("Case ID", case_ids)
-            case = filtered[filtered["_case"].eq(selected_case)].copy().sort_values("_date")
-
-            case_cost = float(case["__service_cost_total"].sum()) if "__service_cost_total" in case.columns else 0.0
-
-            c1,c2,c3,c4 = st.columns(4)
-            kpi(c1, "Total Cost", rupiah(case_cost))
-            kpi(c2, "Jumlah Layanan", f"{len(case):,.0f}")
-            kpi(c3, "Peserta", f"{distinct_count(case,'_kpj'):,.0f}")
-            if case["_date"].notna().any():
-                alos_days = (case["_date"].max() - case["_date"].min()).days + 1
-            else:
-                alos_days = np.nan
-            kpi(c4, "ALOS / Rentang Hari", f"{alos_days:,.0f}" if pd.notna(alos_days) else "-")
-
-            st.markdown("### Timeline / Journey Layanan")
-            timeline = case[["_date","_bmiv","_plkk"]].copy()
-            timeline["Tanggal"] = timeline["_date"].dt.strftime("%d %b %Y")
-            timeline = timeline.rename(columns={"_bmiv":"BMIV","_plkk":"PLKK"})
-            st.dataframe(timeline, use_container_width=True, height=280)
-
-            st.markdown("### Detail Record Case")
-            display_cols = [c for c in case.columns if not str(c).startswith("_")]
-            if not display_cols:
-                display_cols = list(case.columns)
-            st.dataframe(case[display_cols], use_container_width=True, height=400)
+tabs = st.tabs(["Executive Summary", "Tren Bulanan", "BMIV-01 RJTP", "BMIV-02 RJTL", "BMIV-03 RANAP",
+                "BMIV-04 Khusus", "PLKK Performance", "LB-ST", "Unit Cost & Per Kapita", "Case Explorer"])
+with tabs[9]:
+    view_case(E, C)
+if L.empty:
+    for i in range(9):
+        with tabs[i]:
+            st.info("Tidak ada data untuk kombinasi filter ini. Ubah atau reset filter.")
+    st.stop()
+with tabs[0]:
+    view_exec(L, Cf, m)
+with tabs[1]:
+    view_trend(L, pers)
+for b in range(4):
+    with tabs[2 + b]:
+        view_bmiv(L, Cf, b, m)
+with tabs[6]:
+    view_plkk(L, m)
+with tabs[7]:
+    view_lbst(L, Cf, pers)
+with tabs[8]:
+    view_uc(L, Cf, m)
