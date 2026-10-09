@@ -329,7 +329,11 @@ def view_bmiv(L, C, b, m):
         st.subheader("Biaya per Komponen")
         hbar(G.head(15), "biaya", "komponen", BC[b])
     with c2:
-        if b == 2:
+        if b == 1:
+            st.subheader("Kunjungan per Poli/Spesialisasi")
+            pol = Lb.groupby("poli").id.count().sort_values(ascending=False).head(10).reset_index()
+            hbar(pol, "id", "poli", BC[b], fmt="n")
+        elif b == 2:
             st.subheader("Distribusi ALOS (hari rawat)")
             bins = [0, 3, 7, 10, 14, 10_000]
             lab = ["1–3 hr", "4–7 hr", "8–10 hr", "11–14 hr", "15+ hr"]
@@ -343,6 +347,12 @@ def view_bmiv(L, C, b, m):
             st.subheader("Top Diagnosa (biaya)")
             t = Lb.groupby("diagnosa").total.sum().sort_values(ascending=False).head(10).reset_index()
             hbar(t, "total", "diagnosa", BC[b])
+            
+    if b in (1, 2):
+        st.subheader("Top Diagnosa (biaya)")
+        t = Lb.groupby("diagnosa").total.sum().sort_values(ascending=False).head(10).reset_index()
+        hbar(t, "total", "diagnosa", BC[b])
+
     st.subheader("Rincian Komponen")
     G["pct"] = G.biaya / G.biaya.sum()
     G["uc"] = (G.biaya / G.vol.replace(0, np.nan)).fillna(0)
