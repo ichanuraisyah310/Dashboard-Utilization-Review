@@ -452,6 +452,40 @@ def rupiah(x, decimals=0):
         return f"Rp {x:,.{decimals}f}"
     return f"Rp {x:,.0f}"
 
+def format_figure_units(fig):
+    """Format sumbu angka dengan nilai penuh; hanya kolom biaya diberi prefix Rupiah.
+
+    Menghindari auto-abbreviation Plotly (K/M/B) untuk jumlah peserta, kasus,
+    kunjungan, volume, utilisasi, ALOS, dan metrik hitungan lainnya.
+    """
+    def axis_title(axis):
+        title = getattr(getattr(fig.layout, axis), "title", None)
+        value = getattr(title, "text", "") if title is not None else ""
+        return str(value or "").lower()
+
+    def is_money(title):
+        return any(term in title for term in ("biaya", "cost", "pmpm", "rp"))
+
+    # Nilai selalu tampil dengan pemisah ribuan dan tanpa suffix K/M.
+    fig.update_xaxes(tickformat=",.0f", separatethousands=True, exponentformat="none", showexponent="none")
+    fig.update_yaxes(tickformat=",.0f", separatethousands=True, exponentformat="none", showexponent="none")
+
+    xt = axis_title("xaxis")
+    yt = axis_title("yaxis")
+    if is_money(xt):
+        fig.update_xaxes(tickprefix="Rp ", tickformat=",.0f")
+    if is_money(yt):
+        fig.update_yaxes(tickprefix="Rp ", tickformat=",.0f")
+
+    # Format sumbu kanan pada grafik gabungan Trend & Monitoring.
+    y2t = axis_title("yaxis2")
+    if y2t:
+        fig.update_layout(yaxis2=dict(tickformat=",.0f", separatethousands=True,
+                                      exponentformat="none", showexponent="none"))
+        if is_money(y2t):
+            fig.update_layout(yaxis2=dict(tickprefix="Rp ", tickformat=",.0f"))
+    return fig
+
 def kpi(col, label, value):
     col.markdown(
         f'<div class="kpi"><div class="v">{value}</div><div class="l">{label}</div></div>',
@@ -730,6 +764,7 @@ if active_page == PAGES[0]:
             cost_bmiv = svc.groupby("BMIV", as_index=False)["Biaya (Rp)"].sum()
             fig = px.pie(cost_bmiv, names="BMIV", values="Biaya (Rp)", hole=.48)
             fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10))
+            format_figure_units(fig)
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with right:
@@ -737,6 +772,7 @@ if active_page == PAGES[0]:
         top_cost = svc.sort_values("Biaya (Rp)", ascending=False).head(10)
         fig = px.bar(top_cost.sort_values("Biaya (Rp)"), x="Biaya (Rp)", y="Komponen Layanan", orientation="h")
         fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="")
+        format_figure_units(fig)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 # ============================================================
@@ -779,6 +815,7 @@ if active_page == PAGES[1]:
             yaxis_title=metric,
             margin=dict(l=45, r=20, t=45, b=85),
         )
+        format_figure_units(fig)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
         # Grafik gabungan biaya + volume/utilisasi sesuai konsep mockup.
@@ -806,6 +843,7 @@ if active_page == PAGES[1]:
             legend=dict(orientation="h"),
             margin=dict(l=45, r=55, t=55, b=85),
         )
+        format_figure_units(fig2)
         st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
 # ============================================================
@@ -830,6 +868,7 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
         fig = px.pie(util, names="Komponen Layanan", values="Volume", hole=.45,
                      title="Komposisi Utilisasi per Layanan")
         fig.update_layout(height=380)
+        format_figure_units(fig)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with c2:
@@ -837,6 +876,7 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
         fig = px.bar(top, x="Volume", y="Komponen Layanan", orientation="h",
                      title="Top 10 Layanan berdasarkan Volume")
         fig.update_layout(height=380, yaxis_title="")
+        format_figure_units(fig)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     c3, c4 = st.columns(2)
@@ -846,6 +886,7 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
         fig = px.bar(cost, x="Biaya (Rp)", y="Komponen Layanan", orientation="h",
                      title="Komposisi Biaya" + (" Rawat Inap" if inpatient else " per Layanan"))
         fig.update_layout(height=400, yaxis_title="")
+        format_figure_units(fig)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with c4:
@@ -858,6 +899,7 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
                 if not alos.empty:
                     fig = px.histogram(alos, x=alos_col, nbins=15, title="Distribusi ALOS")
                     fig.update_layout(height=400)
+                    format_figure_units(fig)
                     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
                 else:
                     st.info("Kolom ALOS tersedia tetapi tidak berisi angka.")
@@ -875,6 +917,7 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
                 title="Volume vs Unit Cost"
             )
             fig.update_layout(height=400)
+            format_figure_units(fig)
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 render_bmiv_tab(PAGES[2], "RJTP", "BMIV-01 · Rawat Jalan Tingkat Pertama")
@@ -911,16 +954,24 @@ if active_page == PAGES[6]:
         a, b, c = st.columns(3)
         with a:
             top = base.nlargest(10, "Biaya").sort_values("Biaya")
-            st.plotly_chart(px.bar(top, x="Biaya", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Total Biaya"), use_container_width=True)
+            fig = px.bar(top, x="Biaya", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Total Biaya")
+            format_figure_units(fig)
+            st.plotly_chart(fig, use_container_width=True)
         with b:
             top = base.nlargest(10, "Utilisasi").sort_values("Utilisasi")
-            st.plotly_chart(px.bar(top, x="Utilisasi", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Utilisasi"), use_container_width=True)
+            fig = px.bar(top, x="Utilisasi", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Utilisasi")
+            format_figure_units(fig)
+            st.plotly_chart(fig, use_container_width=True)
         with c:
             top = base[base["Unit Cost"].notna()].nlargest(10, "Unit Cost").sort_values("Unit Cost")
-            st.plotly_chart(px.bar(top, x="Unit Cost", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Unit Cost"), use_container_width=True)
+            fig = px.bar(top, x="Unit Cost", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Unit Cost")
+            format_figure_units(fig)
+            st.plotly_chart(fig, use_container_width=True)
 
         topcase = base.nlargest(10, "Cost per Case").sort_values("Cost per Case")
-        st.plotly_chart(px.bar(topcase, x="Cost per Case", y="PLKK", orientation="h", title="Cost per Case per PLKK"), use_container_width=True)
+        fig = px.bar(topcase, x="Cost per Case", y="PLKK", orientation="h", title="Cost per Case per PLKK")
+        format_figure_units(fig)
+        st.plotly_chart(fig, use_container_width=True)
 
         st.dataframe(
             base.sort_values("Biaya", ascending=False).style.format({
@@ -970,10 +1021,14 @@ if active_page == PAGES[8]:
     c1, c2 = st.columns(2)
     with c1:
         topuc = uc[uc["Unit Cost (Rp)"].notna()].nlargest(10, "Unit Cost (Rp)").sort_values("Unit Cost (Rp)")
-        st.plotly_chart(px.bar(topuc, x="Unit Cost (Rp)", y="Komponen Layanan", orientation="h", title="Unit Cost per Komponen"), use_container_width=True)
+        fig = px.bar(topuc, x="Unit Cost (Rp)", y="Komponen Layanan", orientation="h", title="Unit Cost per Komponen")
+        format_figure_units(fig)
+        st.plotly_chart(fig, use_container_width=True)
     with c2:
         scatter = uc[uc["Unit Cost (Rp)"].notna() & (uc["Volume"] > 0)]
-        st.plotly_chart(px.scatter(scatter, x="Volume", y="Unit Cost (Rp)", size="Biaya (Rp)", hover_name="Komponen Layanan", title="Volume vs Unit Cost"), use_container_width=True)
+        fig = px.scatter(scatter, x="Volume", y="Unit Cost (Rp)", size="Biaya (Rp)", hover_name="Komponen Layanan", title="Volume vs Unit Cost")
+        format_figure_units(fig)
+        st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
 # 10 CASE EXPLORER
