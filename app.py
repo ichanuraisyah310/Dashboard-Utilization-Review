@@ -213,7 +213,6 @@ def agg(L, m):
 
 def hbar(df, x, y, color, title=None, fmt="rp"):
     d = df.iloc[::-1]
-    # Format tooltip agar menggunakan pemisah ribuan titik dan desimal koma
     if fmt == "rp":
         hover_vals = [f"Rp {fN(v)}" for v in d[x]]
     elif fmt == "n":
@@ -250,7 +249,6 @@ def view_exec(L, C, m):
     with c1:
         st.subheader("Komposisi Biaya per Kelompok Pelayanan (BMIV)")
         bb = L.groupby("b").total.sum().reindex(range(4), fill_value=0)
-        pie_texts = [f"Rp {fN(v)}" for v in bb.values]
         fig = go.Figure(go.Pie(labels=BN, values=bb.values, hole=.6, marker_colors=BC, sort=False,
                                hovertemplate=["%{label}<br>Rp " + fN(v) + " (%{percent})<extra></extra>" for v in bb.values]))
         fig.update_layout(height=400, margin=dict(t=10, b=0), legend=dict(orientation="h", y=-0.05))
@@ -304,7 +302,7 @@ def view_trend(L, pers):
     st.subheader("Rekap Bulanan")
     st.dataframe(T[["Bulan", "pes", "kas", "kun", "bi", "uc", "ut", "mom"]], hide_index=True, width="stretch",
                  column_config={"pes": NUM("Peserta", format="localized"), "kas": NUM("Kasus", format="localized"), "kun": NUM("Kunjungan", format="localized"), "bi": NUM("Biaya", format="localized"),
-                                "uc": NUM("Unit Cost", format="localized"), "ut": NUM("Util /1.000", format=".,1f"),
+                                "uc": NUM("Unit Cost", format="localized"), "ut": NUM("Util /1.000", format="%.1f"),
                                 "mom": NUM("Δ Biaya MoM", format="percent")})
 
 
@@ -341,10 +339,6 @@ def view_bmiv(L, C, b, m):
                                    hovertemplate=["%{x}<br>Kasus: " + t + "<extra></extra>" for t in alos_texts]))
             fig.update_layout(height=380, margin=dict(t=10), yaxis_title="Kasus")
             st.plotly_chart(fig, width="stretch")
-        elif b == 1:
-            st.subheader("Kunjungan per Poli/Spesialisasi")
-            t = Lb.poli.value_counts().head(10).rename_axis("poli").reset_index(name="n")
-            hbar(t, "n", "poli", BC[1], fmt="n")
         else:
             st.subheader("Top Diagnosa (biaya)")
             t = Lb.groupby("diagnosa").total.sum().sort_values(ascending=False).head(10).reset_index()
@@ -362,7 +356,7 @@ def view_bmiv(L, C, b, m):
         K["bpk"] = K.biaya / K.kasus
         st.dataframe(K, hide_index=True, width="stretch",
                      column_config={"kelas": "Kelas", "kasus": NUM("Kasus", format="localized"), "hari": NUM("Hari Rawat", format="localized"),
-                                    "alos": NUM("ALOS (hari)", format=".,1f"), "biaya": NUM("Biaya", format="localized"),
+                                    "alos": NUM("ALOS (hari)", format="%.1f"), "biaya": NUM("Biaya", format="localized"),
                                     "bpk": NUM("Biaya / Kasus", format="localized")})
 
 
@@ -388,7 +382,7 @@ def view_plkk(L, m):
     st.dataframe(R.sort_values("bi", ascending=False), hide_index=True, width="stretch",
                  column_config={"plkk": "PLKK", "pes": NUM("Peserta", format="localized"), "kas": NUM("Kasus", format="localized"), "kun": NUM("Kunjungan", format="localized"),
                                 "bi": NUM("Total Biaya", format="localized"), "uc": NUM("Unit Cost", format="localized"), "cpc": NUM("Cost per Case", format="localized"),
-                                "ut": NUM("Util /1.000", format=".,1f")})
+                                "ut": NUM("Util /1.000", format="%.1f")})
 
 
 def view_lbst(L, C, pers):
@@ -439,7 +433,7 @@ def view_uc(L, C, m):
                  width="stretch",
                  column_config={"komponen": "Komponen", "vol": NUM("Volume", format="localized"), "biaya": NUM("Biaya", format="localized"),
                                 "pct": NUM("% Proporsi", format="percent"), "uc": NUM("Unit Cost", format="localized"),
-                                "ut": NUM("Util /1.000", format=".,1f"), "pm": NUM("PMPM", format="localized")})
+                                "ut": NUM("Util /1.000", format="%.1f"), "pm": NUM("PMPM", format="localized")})
 
 
 def view_case(E, C):
