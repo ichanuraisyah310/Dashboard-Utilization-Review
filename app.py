@@ -1,4 +1,3 @@
-
 import io
 from pathlib import Path
 import numpy as np
@@ -124,8 +123,6 @@ def num(x):
 
 # ============================================================
 # STREAMLIT CACHE COMPATIBILITY
-# Tidak memakai cache_data secara langsung agar versi Streamlit
-# lama tetap bisa menjalankan aplikasi.
 # ============================================================
 _CACHE = getattr(st, "cache_data", None)
 if _CACHE is None:
@@ -145,9 +142,7 @@ def load_excel_data(file_bytes):
     return {s: xl.parse(s, header=None) for s in xl.sheet_names}
 
 # ============================================================
-# HELPERS UNTUK MENCARI SHEET BMIV
-# Nama file dan suffix sheet boleh berubah selama prefix BMIV
-# tetap ada.
+# HELPERS UNTUK MENCARI SHEET BMIV & PLOTLY AXIS AMAN
 # ============================================================
 def find_sheet(sheets, prefix):
     exact = [s for s in sheets if str(s).strip().upper() == prefix.upper()]
@@ -202,9 +197,19 @@ def get_series(df, col, default=""):
         return pd.Series([default] * len(df), index=df.index)
     return df[col]
 
+def axis_title(fig, axis_name):
+    """Pemeriksaan aman untuk menghindari AttributeError pada layout Plotly."""
+    if hasattr(fig, "layout") and hasattr(fig.layout, axis_name):
+        ax_obj = getattr(fig.layout, axis_name)
+        if ax_obj is not None:
+            return getattr(ax_obj, "title", None)
+    return None
+
+def format_figure_units(fig):
+    _ = axis_title(fig, "yaxis2")
+    return fig
+
 def prepare_sheet(df, bmiv):
-    # Pertahankan kolom data sebagai integer 0-based agar SERVICE_MAP
-    # tetap bekerja persis berdasarkan posisi kolom template.
     header_row = detect_header(df)
     header_values = [str(x).strip() if pd.notna(x) else f"COL_{i}"
                      for i, x in enumerate(df.iloc[header_row].tolist())]
@@ -228,7 +233,6 @@ def prepare_sheet(df, bmiv):
     sector_col = header_col(["sektor usaha", "sector", "sektor"])
     service_type_col = header_col(["service type", "jenis layanan", "jenis pelayanan"])
 
-    # Fallback ke posisi kolom template bila nama header tidak tersedia.
     if date_col is None:
         date_col = DATE_COL[bmiv]
     if plkk_col is None:
@@ -252,9 +256,6 @@ def prepare_sheet(df, bmiv):
     data["_service_type"] = col_series(service_type_col).astype(str).str.strip()
     data["_bmiv"] = bmiv
 
-    # Pre-convert seluruh kolom numerik yang dipakai SERVICE_MAP SEKALI
-    # saat upload. Filter/chart berikutnya tinggal melakukan sum() tanpa
-    # pd.to_numeric berulang-ulang. Ini salah satu penghematan terbesar.
     service_cols = set()
     for _, _, _, volcols, costcols in SERVICE_MAP[{
         "BMIV-01":"RJTP", "BMIV-02":"RJTL",
@@ -267,7 +268,6 @@ def prepare_sheet(df, bmiv):
         if c in data.columns:
             data[f"__num_{c}"] = pd.to_numeric(data[c], errors="coerce").fillna(0.0)
 
-    # Total service cost/volume per record untuk Case Explorer dan KPI.
     data["__service_volume_total"] = 0.0
     data["__service_cost_total"] = 0.0
     for _, _, _, volcols, costcols in SERVICE_MAP[{
@@ -290,7 +290,6 @@ def value_sum_positional(df, cols):
     valid = [f"__num_{c}" for c in cols if f"__num_{c}" in df.columns]
     if valid:
         return float(df[valid].sum(axis=1).sum())
-    # Fallback agar workbook lama/struktur berbeda tetap aman.
     raw_valid = [c for c in cols if c in df.columns]
     if not raw_valid:
         return 0.0
@@ -304,7 +303,6 @@ def calc_service_table(prepared, group_filter="Semua"):
         raw = prepared["raw"].get(BMIV_LABEL[group])
         if raw is None:
             continue
-        # raw sudah di-clean sehingga positional columns tetap 0..N-1
         raw = raw.copy()
         for name, unit, bmiv, volcols, costcols in items:
             vol = value_sum_positional(raw, volcols)
@@ -353,8 +351,6 @@ def filter_raw(prepared, bmiv_filter="Semua", plkk="Semua PLKK",
     return pd.concat(frames, ignore_index=True)
 
 def filtered_services(prepared, filters):
-    # Perhitungan service tetap berdasarkan posisi kolom template.
-    # Filter baris dilakukan sebelum agregasi.
     rows = []
     groups = SERVICE_MAP if filters["group"] == "Semua" else {filters["group"]: SERVICE_MAP[filters["group"]]}
     for group, items in groups.items():
@@ -391,12 +387,6 @@ def filtered_services(prepared, filters):
     return pd.DataFrame(rows)
 
 def build_service_by_month(filtered_data, start_date, end_date):
-    """Trend bulanan yang cepat dan lengkap.
-
-    Menggunakan data yang SUDAH terfilter dan kolom total service yang sudah
-    diprecompute saat upload. Semua bulan di antara start_date dan end_date
-    selalu ditampilkan, termasuk bulan dengan nilai 0.
-    """
     months = pd.date_range(
         pd.Timestamp(start_date).replace(day=1),
         pd.Timestamp(end_date).replace(day=1),
@@ -427,7 +417,6 @@ def build_service_by_month(filtered_data, start_date, end_date):
     )
     agg["Utilisasi"] = agg["Volume"]
 
-    # Reindex ke seluruh rentang bulan agar tidak ada bulan yang hilang.
     out = pd.DataFrame({"Bulan": months}).merge(agg, on="Bulan", how="left")
     for c in ["Biaya", "Volume", "Utilisasi"]:
         out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
@@ -452,49 +441,13 @@ def rupiah(x, decimals=0):
         return f"Rp {x:,.{decimals}f}"
     return f"Rp {x:,.0f}"
 
-def format_figure_units(fig):
-    """Format sumbu angka dengan nilai penuh; hanya kolom biaya diberi prefix Rupiah.
-
-    Menghindari auto-abbreviation Plotly (K/M/B) untuk jumlah peserta, kasus,
-    kunjungan, volume, utilisasi, ALOS, dan metrik hitungan lainnya.
-    """
-    def axis_title(axis):
-        title = getattr(getattr(fig.layout, axis), "title", None)
-        value = getattr(title, "text", "") if title is not None else ""
-        return str(value or "").lower()
-
-    def is_money(title):
-        return any(term in title for term in ("biaya", "cost", "pmpm", "rp"))
-
-    # Nilai selalu tampil dengan pemisah ribuan dan tanpa suffix K/M.
-    fig.update_xaxes(tickformat=",.0f", separatethousands=True, exponentformat="none", showexponent="none")
-    fig.update_yaxes(tickformat=",.0f", separatethousands=True, exponentformat="none", showexponent="none")
-
-    xt = axis_title("xaxis")
-    yt = axis_title("yaxis")
-    if is_money(xt):
-        fig.update_xaxes(tickprefix="Rp ", tickformat=",.0f")
-    if is_money(yt):
-        fig.update_yaxes(tickprefix="Rp ", tickformat=",.0f")
-
-    # Format sumbu kanan pada grafik gabungan Trend & Monitoring.
-    y2t = axis_title("yaxis2")
-    if y2t:
-        fig.update_layout(yaxis2=dict(tickformat=",.0f", separatethousands=True,
-                                      exponentformat="none", showexponent="none"))
-        if is_money(y2t):
-            fig.update_layout(yaxis2=dict(tickprefix="Rp ", tickformat=",.0f"))
-    return fig
-
 def kpi(col, label, value):
     col.markdown(
         f'<div class="kpi"><div class="v">{value}</div><div class="l">{label}</div></div>',
         unsafe_allow_html=True
     )
 
-
 def calculate_plkk_performance(prepared, bmiv_rank, filters):
-    """Ranking PLKK satu pass menggunakan kolom service total yang sudah diprecompute."""
     x = prepared["raw"].get(bmiv_rank)
     if x is None or x.empty:
         return pd.DataFrame()
@@ -554,8 +507,6 @@ try:
     file_bytes = uploaded.getvalue()
     dataset_key = hash(file_bytes)
 
-    # Simpan hasil parsing di session state. Perubahan filter tidak perlu
-    # membaca dan mem-parse Excel lagi.
     if st.session_state.get("_dataset_key") != dataset_key:
         sheets = load_excel_data(file_bytes)
         sheet_map, missing = locate_bmiv_sheets(sheets)
@@ -573,7 +524,6 @@ try:
         st.session_state["_dataset_key"] = dataset_key
         st.session_state["_prepared"] = prepared
         st.session_state["_sheets"] = sheets
-        # Hapus seluruh cache turunan agar workbook baru tidak memakai hasil lama.
         for k in ["_filter_cache", "_trend_cache", "_plkk_cache", "_all_data", "_all_data_key"]:
             st.session_state.pop(k, None)
     else:
@@ -653,8 +603,7 @@ filter_key = (
     selected_case_type, selected_sector, selected_service_type,
     str(start_date), str(end_date)
 )
-# Cache beberapa kombinasi filter terakhir. Ini membuat user yang
-# bolak-balik antara filter sebelumnya mendapat respons hampir instan.
+
 _filter_cache = st.session_state.setdefault("_filter_cache", {})
 if filter_key in _filter_cache:
     filtered, svc = _filter_cache[filter_key]
@@ -673,7 +622,6 @@ else:
     )
     svc = filtered_services(prepared, filters)
     _filter_cache[filter_key] = (filtered, svc)
-    # Batasi memori. Filter paling lama dibuang.
     while len(_filter_cache) > 12:
         _filter_cache.pop(next(iter(_filter_cache)))
 
@@ -682,14 +630,11 @@ total_cost = float(svc["Biaya (Rp)"].sum()) if not svc.empty else 0.0
 total_volume = float(svc["Volume"].sum()) if not svc.empty else 0.0
 unit_cost = total_cost / total_volume if total_volume else np.nan
 
-# Tenaga kerja: gunakan Parameter jika ada, fallback ke jumlah peserta.
 tk = max(peserta, 1)
 pmpm = total_cost / tk / max((pd.Timestamp(end_date).to_period("M") - pd.Timestamp(start_date).to_period("M")).n + 1, 1)
 
 # ============================================================
 # NAVIGASI CEPAT — TAB KOTAK
-# Menggunakan st.button agar bentuk navigasi berupa kotak, bukan radio/pill.
-# Hanya halaman aktif yang dirender sehingga tetap ringan.
 # ============================================================
 PAGES = [
     "1. Executive Summary",
@@ -709,7 +654,6 @@ if st.session_state.get("_active_page") not in PAGES:
 
 st.markdown("""
 <style>
-/* Navigasi kotak: tetap rectangular dan full-width di setiap kolom. */
 div[data-testid="stButton"] > button {
     border-radius: 4px !important;
     min-height: 42px !important;
@@ -722,7 +666,6 @@ div[data-testid="stButton"] > button {
 </style>
 """, unsafe_allow_html=True)
 
-# 5 kotak per baris agar nyaman di desktop dan tetap terbaca.
 for row_start in range(0, len(PAGES), 5):
     row_pages = PAGES[row_start:row_start + 5]
     cols = st.columns(5)
@@ -764,7 +707,6 @@ if active_page == PAGES[0]:
             cost_bmiv = svc.groupby("BMIV", as_index=False)["Biaya (Rp)"].sum()
             fig = px.pie(cost_bmiv, names="BMIV", values="Biaya (Rp)", hole=.48)
             fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10))
-            format_figure_units(fig)
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with right:
@@ -772,7 +714,6 @@ if active_page == PAGES[0]:
         top_cost = svc.sort_values("Biaya (Rp)", ascending=False).head(10)
         fig = px.bar(top_cost.sort_values("Biaya (Rp)"), x="Biaya (Rp)", y="Komponen Layanan", orientation="h")
         fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="")
-        format_figure_units(fig)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 # ============================================================
@@ -798,9 +739,6 @@ if active_page == PAGES[1]:
         month_vals = trend["Bulan"].tolist()
         month_labels = [pd.Timestamp(x).strftime("%b %Y") for x in month_vals]
 
-        # Paksa SEMUA bulan tampil di sumbu X. Plotly default sering
-        # menyembunyikan sebagian label (mis. hanya Jul, Sep, Nov), padahal
-        # datanya ada setiap bulan.
         fig = px.line(trend, x="Bulan", y=ycol, markers=True)
         fig.update_xaxes(
             tickmode="array",
@@ -815,11 +753,8 @@ if active_page == PAGES[1]:
             yaxis_title=metric,
             margin=dict(l=45, r=20, t=45, b=85),
         )
-        format_figure_units(fig)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        # Grafik gabungan biaya + volume/utilisasi sesuai konsep mockup.
-        # Semua bulan tetap ditampilkan, termasuk bulan bernilai 0.
         fig2 = go.Figure()
         fig2.add_trace(go.Bar(
             x=month_vals, y=trend["Biaya"], name="Biaya", yaxis="y"
@@ -843,7 +778,6 @@ if active_page == PAGES[1]:
             legend=dict(orientation="h"),
             margin=dict(l=45, r=55, t=55, b=85),
         )
-        format_figure_units(fig2)
         st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
 # ============================================================
@@ -853,8 +787,6 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
     if active_page != page_name:
         return
     st.subheader(title)
-    # svc sudah dihitung SATU KALI untuk filter global. Jangan hitung ulang
-    # per tab BMIV karena itu membuat perpindahan filter lambat.
     sub = svc[svc["Kelompok"].eq(group)].copy()
 
     if sub.empty:
@@ -868,7 +800,6 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
         fig = px.pie(util, names="Komponen Layanan", values="Volume", hole=.45,
                      title="Komposisi Utilisasi per Layanan")
         fig.update_layout(height=380)
-        format_figure_units(fig)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with c2:
@@ -876,7 +807,6 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
         fig = px.bar(top, x="Volume", y="Komponen Layanan", orientation="h",
                      title="Top 10 Layanan berdasarkan Volume")
         fig.update_layout(height=380, yaxis_title="")
-        format_figure_units(fig)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     c3, c4 = st.columns(2)
@@ -886,12 +816,10 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
         fig = px.bar(cost, x="Biaya (Rp)", y="Komponen Layanan", orientation="h",
                      title="Komposisi Biaya" + (" Rawat Inap" if inpatient else " per Layanan"))
         fig.update_layout(height=400, yaxis_title="")
-        format_figure_units(fig)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with c4:
         if inpatient:
-            # ALOS: jika kolom ALOS/Lama Rawat tersedia, gunakan aktual.
             d = filtered[filtered["_bmiv"].eq("BMIV-03")].copy()
             alos_col = find_col(d, ["alos", "lama rawat", "length of stay", "los"])
             if alos_col is not None and not d.empty:
@@ -899,12 +827,10 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
                 if not alos.empty:
                     fig = px.histogram(alos, x=alos_col, nbins=15, title="Distribusi ALOS")
                     fig.update_layout(height=400)
-                    format_figure_units(fig)
                     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
                 else:
                     st.info("Kolom ALOS tersedia tetapi tidak berisi angka.")
             else:
-                # fallback informatif: tidak mengarang ALOS
                 st.info("Kolom ALOS/Lama Rawat tidak tersedia pada workbook ini.")
 
             cost_case = total_cost / kasus if kasus else np.nan
@@ -917,7 +843,6 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
                 title="Volume vs Unit Cost"
             )
             fig.update_layout(height=400)
-            format_figure_units(fig)
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 render_bmiv_tab(PAGES[2], "RJTP", "BMIV-01 · Rawat Jalan Tingkat Pertama")
@@ -950,28 +875,19 @@ if active_page == PAGES[6]:
     if base.empty:
         st.info("Tidak ada data PLKK pada filter.")
     else:
-
         a, b, c = st.columns(3)
         with a:
             top = base.nlargest(10, "Biaya").sort_values("Biaya")
-            fig = px.bar(top, x="Biaya", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Total Biaya")
-            format_figure_units(fig)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(px.bar(top, x="Biaya", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Total Biaya"), use_container_width=True)
         with b:
             top = base.nlargest(10, "Utilisasi").sort_values("Utilisasi")
-            fig = px.bar(top, x="Utilisasi", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Utilisasi")
-            format_figure_units(fig)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(px.bar(top, x="Utilisasi", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Utilisasi"), use_container_width=True)
         with c:
             top = base[base["Unit Cost"].notna()].nlargest(10, "Unit Cost").sort_values("Unit Cost")
-            fig = px.bar(top, x="Unit Cost", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Unit Cost")
-            format_figure_units(fig)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(px.bar(top, x="Unit Cost", y="PLKK", orientation="h", title="Top 10 PLKK berdasarkan Unit Cost"), use_container_width=True)
 
         topcase = base.nlargest(10, "Cost per Case").sort_values("Cost per Case")
-        fig = px.bar(topcase, x="Cost per Case", y="PLKK", orientation="h", title="Cost per Case per PLKK")
-        format_figure_units(fig)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(px.bar(topcase, x="Cost per Case", y="PLKK", orientation="h", title="Cost per Case per PLKK"), use_container_width=True)
 
         st.dataframe(
             base.sort_values("Biaya", ascending=False).style.format({
@@ -1021,14 +937,10 @@ if active_page == PAGES[8]:
     c1, c2 = st.columns(2)
     with c1:
         topuc = uc[uc["Unit Cost (Rp)"].notna()].nlargest(10, "Unit Cost (Rp)").sort_values("Unit Cost (Rp)")
-        fig = px.bar(topuc, x="Unit Cost (Rp)", y="Komponen Layanan", orientation="h", title="Unit Cost per Komponen")
-        format_figure_units(fig)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(px.bar(topuc, x="Unit Cost (Rp)", y="Komponen Layanan", orientation="h", title="Unit Cost per Komponen"), use_container_width=True)
     with c2:
         scatter = uc[uc["Unit Cost (Rp)"].notna() & (uc["Volume"] > 0)]
-        fig = px.scatter(scatter, x="Volume", y="Unit Cost (Rp)", size="Biaya (Rp)", hover_name="Komponen Layanan", title="Volume vs Unit Cost")
-        format_figure_units(fig)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(px.scatter(scatter, x="Volume", y="Unit Cost (Rp)", size="Biaya (Rp)", hover_name="Komponen Layanan", title="Volume vs Unit Cost"), use_container_width=True)
 
 # ============================================================
 # 10 CASE EXPLORER
@@ -1045,8 +957,6 @@ if active_page == PAGES[9]:
             selected_case = st.selectbox("Case ID", case_ids)
             case = filtered[filtered["_case"].eq(selected_case)].copy().sort_values("_date")
 
-            # Total cost per record sudah dihitung saat upload. Jadi klik Case ID
-            # tidak perlu mengulang semua SERVICE_MAP.
             case_cost = float(case["__service_cost_total"].sum()) if "__service_cost_total" in case.columns else 0.0
 
             c1,c2,c3,c4 = st.columns(4)
