@@ -123,6 +123,8 @@ def num(x):
 
 # ============================================================
 # STREAMLIT CACHE COMPATIBILITY
+# Tidak memakai cache_data secara langsung agar versi Streamlit
+# lama tetap bisa menjalankan aplikasi.
 # ============================================================
 _CACHE = getattr(st, "cache_data", None)
 if _CACHE is None:
@@ -142,7 +144,9 @@ def load_excel_data(file_bytes):
     return {s: xl.parse(s, header=None) for s in xl.sheet_names}
 
 # ============================================================
-# HELPERS UNTUK MENCARI SHEET BMIV & PLOTLY AXIS AMAN
+# HELPERS UNTUK MENCARI SHEET BMIV
+# Nama file dan suffix sheet boleh berubah selama prefix BMIV
+# tetap ada.
 # ============================================================
 def find_sheet(sheets, prefix):
     exact = [s for s in sheets if str(s).strip().upper() == prefix.upper()]
@@ -197,19 +201,9 @@ def get_series(df, col, default=""):
         return pd.Series([default] * len(df), index=df.index)
     return df[col]
 
-def axis_title(fig, axis_name):
-    """Pemeriksaan aman untuk menghindari AttributeError pada layout Plotly."""
-    if hasattr(fig, "layout") and hasattr(fig.layout, axis_name):
-        ax_obj = getattr(fig.layout, axis_name)
-        if ax_obj is not None:
-            return getattr(ax_obj, "title", None)
-    return None
-
-def format_figure_units(fig):
-    _ = axis_title(fig, "yaxis2")
-    return fig
-
 def prepare_sheet(df, bmiv):
+    # Pertahankan kolom data sebagai integer 0-based agar SERVICE_MAP
+    # tetap bekerja persis berdasarkan posisi kolom template.
     header_row = detect_header(df)
     header_values = [str(x).strip() if pd.notna(x) else f"COL_{i}"
                      for i, x in enumerate(df.iloc[header_row].tolist())]
@@ -233,6 +227,7 @@ def prepare_sheet(df, bmiv):
     sector_col = header_col(["sektor usaha", "sector", "sektor"])
     service_type_col = header_col(["service type", "jenis layanan", "jenis pelayanan"])
 
+    # Fallback ke posisi kolom template bila nama header tidak tersedia.
     if date_col is None:
         date_col = DATE_COL[bmiv]
     if plkk_col is None:
@@ -256,6 +251,9 @@ def prepare_sheet(df, bmiv):
     data["_service_type"] = col_series(service_type_col).astype(str).str.strip()
     data["_bmiv"] = bmiv
 
+    # Pre-convert seluruh kolom numerik yang dipakai SERVICE_MAP SEKALI
+    # saat upload. Filter/chart berikutnya tinggal melakukan sum() tanpa
+    # pd.to_numeric berulang-ulang. Ini salah satu penghematan terbesar.
     service_cols = set()
     for _, _, _, volcols, costcols in SERVICE_MAP[{
         "BMIV-01":"RJTP", "BMIV-02":"RJTL",
@@ -268,6 +266,7 @@ def prepare_sheet(df, bmiv):
         if c in data.columns:
             data[f"__num_{c}"] = pd.to_numeric(data[c], errors="coerce").fillna(0.0)
 
+    # Total service cost/volume per record untuk Case Explorer dan KPI.
     data["__service_volume_total"] = 0.0
     data["__service_cost_total"] = 0.0
     for _, _, _, volcols, costcols in SERVICE_MAP[{
@@ -290,6 +289,7 @@ def value_sum_positional(df, cols):
     valid = [f"__num_{c}" for c in cols if f"__num_{c}" in df.columns]
     if valid:
         return float(df[valid].sum(axis=1).sum())
+    # Fallback agar workbook lama/struktur berbeda tetap aman.
     raw_valid = [c for c in cols if c in df.columns]
     if not raw_valid:
         return 0.0
@@ -303,6 +303,7 @@ def calc_service_table(prepared, group_filter="Semua"):
         raw = prepared["raw"].get(BMIV_LABEL[group])
         if raw is None:
             continue
+        # raw sudah di-clean sehingga positional columns tetap 0..N-1
         raw = raw.copy()
         for name, unit, bmiv, volcols, costcols in items:
             vol = value_sum_positional(raw, volcols)
@@ -351,6 +352,8 @@ def filter_raw(prepared, bmiv_filter="Semua", plkk="Semua PLKK",
     return pd.concat(frames, ignore_index=True)
 
 def filtered_services(prepared, filters):
+    # Perhitungan service tetap berdasarkan posisi kolom template.
+    # Filter baris dilakukan sebelum agregasi.
     rows = []
     groups = SERVICE_MAP if filters["group"] == "Semua" else {filters["group"]: SERVICE_MAP[filters["group"]]}
     for group, items in groups.items():
@@ -387,40 +390,55 @@ def filtered_services(prepared, filters):
     return pd.DataFrame(rows)
 
 def build_service_by_month(filtered_data, start_date, end_date):
+    """Trend bulanan dengan skala Volume dan Utilisasi standar (jumlah kunjungan/kasus)
+
+    sehingga nilainya proporsional, tidak membengkak ke angka jutaan (M),
+    dan dihitung secara independen dari Biaya.
+    """
     months = pd.date_range(
         pd.Timestamp(start_date).replace(day=1),
         pd.Timestamp(end_date).replace(day=1),
         freq="MS",
     )
+    columns = ["Bulan", "Biaya", "Volume", "Utilisasi"]
     if filtered_data is None or filtered_data.empty:
         return pd.DataFrame({
             "Bulan": months,
             "Biaya": 0.0,
             "Volume": 0.0,
             "Utilisasi": 0.0,
-        })
+        })[columns]
 
-    x = filtered_data.copy()
-    x = x[x["_date"].notna()].copy()
+    x = filtered_data.loc[filtered_data["_date"].notna()].copy()
     if x.empty:
         return pd.DataFrame({
             "Bulan": months,
             "Biaya": 0.0,
             "Volume": 0.0,
             "Utilisasi": 0.0,
-        })
+        })[columns]
+
+    for col in ["__service_cost_total"]:
+        if col not in x.columns:
+            x[col] = 0.0
+        x[col] = pd.to_numeric(x[col], errors="coerce").fillna(0.0)
 
     x["Bulan"] = x["_date"].dt.to_period("M").dt.to_timestamp()
-    agg = x.groupby("Bulan", as_index=False).agg(
-        Biaya=("__service_cost_total", "sum"),
-        Volume=("__service_volume_total", "sum"),
+    
+    # Perhitungan akurat: Biaya dari total cost, Volume dari jumlah baris kunjungan per bulan, dan Utilisasi dari jumlah kasus unik
+    agg = (
+        x.groupby("Bulan", as_index=False)
+        .agg(
+            Biaya=("__service_cost_total", "sum"),
+            Volume=("_date", "count"),
+            Utilisasi=("_case", "nunique"),
+        )
     )
-    agg["Utilisasi"] = agg["Volume"]
 
     out = pd.DataFrame({"Bulan": months}).merge(agg, on="Bulan", how="left")
-    for c in ["Biaya", "Volume", "Utilisasi"]:
-        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
-    return out
+    for col in ["Biaya", "Volume", "Utilisasi"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+    return out[columns]
 
 def distinct_count(d, col):
     if d.empty or col not in d.columns:
@@ -447,7 +465,9 @@ def kpi(col, label, value):
         unsafe_allow_html=True
     )
 
+
 def calculate_plkk_performance(prepared, bmiv_rank, filters):
+    """Ranking PLKK satu pass menggunakan kolom service total yang sudah diprecompute."""
     x = prepared["raw"].get(bmiv_rank)
     if x is None or x.empty:
         return pd.DataFrame()
@@ -507,6 +527,8 @@ try:
     file_bytes = uploaded.getvalue()
     dataset_key = hash(file_bytes)
 
+    # Simpan hasil parsing di session state. Perubahan filter tidak perlu
+    # membaca dan mem-parse Excel lagi.
     if st.session_state.get("_dataset_key") != dataset_key:
         sheets = load_excel_data(file_bytes)
         sheet_map, missing = locate_bmiv_sheets(sheets)
@@ -524,6 +546,7 @@ try:
         st.session_state["_dataset_key"] = dataset_key
         st.session_state["_prepared"] = prepared
         st.session_state["_sheets"] = sheets
+        # Hapus seluruh cache turunan agar workbook baru tidak memakai hasil lama.
         for k in ["_filter_cache", "_trend_cache", "_plkk_cache", "_all_data", "_all_data_key"]:
             st.session_state.pop(k, None)
     else:
@@ -603,7 +626,8 @@ filter_key = (
     selected_case_type, selected_sector, selected_service_type,
     str(start_date), str(end_date)
 )
-
+# Cache beberapa kombinasi filter terakhir. Ini membuat user yang
+# bolak-balik antara filter sebelumnya mendapat respons hampir instan.
 _filter_cache = st.session_state.setdefault("_filter_cache", {})
 if filter_key in _filter_cache:
     filtered, svc = _filter_cache[filter_key]
@@ -622,6 +646,7 @@ else:
     )
     svc = filtered_services(prepared, filters)
     _filter_cache[filter_key] = (filtered, svc)
+    # Batasi memori. Filter paling lama dibuang.
     while len(_filter_cache) > 12:
         _filter_cache.pop(next(iter(_filter_cache)))
 
@@ -630,11 +655,14 @@ total_cost = float(svc["Biaya (Rp)"].sum()) if not svc.empty else 0.0
 total_volume = float(svc["Volume"].sum()) if not svc.empty else 0.0
 unit_cost = total_cost / total_volume if total_volume else np.nan
 
+# Tenaga kerja: gunakan Parameter jika ada, fallback ke jumlah peserta.
 tk = max(peserta, 1)
 pmpm = total_cost / tk / max((pd.Timestamp(end_date).to_period("M") - pd.Timestamp(start_date).to_period("M")).n + 1, 1)
 
 # ============================================================
 # NAVIGASI CEPAT — TAB KOTAK
+# Menggunakan st.button agar bentuk navigasi berupa kotak, bukan radio/pill.
+# Hanya halaman aktif yang dirender sehingga tetap ringan.
 # ============================================================
 PAGES = [
     "1. Executive Summary",
@@ -654,6 +682,7 @@ if st.session_state.get("_active_page") not in PAGES:
 
 st.markdown("""
 <style>
+/* Navigasi kotak: tetap rectangular dan full-width di setiap kolom. */
 div[data-testid="stButton"] > button {
     border-radius: 4px !important;
     min-height: 42px !important;
@@ -666,6 +695,7 @@ div[data-testid="stButton"] > button {
 </style>
 """, unsafe_allow_html=True)
 
+# 5 kotak per baris agar nyaman di desktop dan tetap terbaca.
 for row_start in range(0, len(PAGES), 5):
     row_pages = PAGES[row_start:row_start + 5]
     cols = st.columns(5)
@@ -739,6 +769,9 @@ if active_page == PAGES[1]:
         month_vals = trend["Bulan"].tolist()
         month_labels = [pd.Timestamp(x).strftime("%b %Y") for x in month_vals]
 
+        # Paksa SEMUA bulan tampil di sumbu X. Plotly default sering
+        # menyembunyikan sebagian label (mis. hanya Jul, Sep, Nov), padahal
+        # datanya ada setiap bulan.
         fig = px.line(trend, x="Bulan", y=ycol, markers=True)
         fig.update_xaxes(
             tickmode="array",
@@ -755,13 +788,16 @@ if active_page == PAGES[1]:
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
+        # Monitoring menggunakan metrik dan nilai yang sama persis dengan
+        # grafik Trend. Tidak mencampur Biaya dengan Volume pada satu sumbu
+        # pilihan metrik, sehingga hasilnya konsisten setiap kali difilter.
         fig2 = go.Figure()
         fig2.add_trace(go.Bar(
-            x=month_vals, y=trend["Biaya"], name="Biaya", yaxis="y"
-        ))
-        fig2.add_trace(go.Scatter(
-            x=month_vals, y=trend["Volume"], name="Volume/Utilisasi",
-            mode="lines+markers", yaxis="y2"
+            x=month_vals,
+            y=trend[ycol],
+            name=metric,
+            marker_line_width=0,
+            hovertemplate="%{x|%b %Y}<br>" + metric + ": %{y:,.0f}<extra></extra>",
         ))
         fig2.update_xaxes(
             tickmode="array",
@@ -769,14 +805,14 @@ if active_page == PAGES[1]:
             ticktext=month_labels,
             tickangle=-45,
         )
+        yaxis_title = "Biaya (Rp)" if metric == "Biaya" else metric
         fig2.update_layout(
             height=430,
-            title="Biaya + Volume/Utilisasi per Bulan",
+            title=f"Monitoring {metric} per Bulan",
             xaxis_title="Bulan",
-            yaxis=dict(title="Biaya (Rp)"),
-            yaxis2=dict(title="Volume", overlaying="y", side="right"),
-            legend=dict(orientation="h"),
-            margin=dict(l=45, r=55, t=55, b=85),
+            yaxis_title=yaxis_title,
+            showlegend=False,
+            margin=dict(l=45, r=20, t=55, b=85),
         )
         st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
@@ -787,6 +823,8 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
     if active_page != page_name:
         return
     st.subheader(title)
+    # svc sudah dihitung SATU KALI untuk filter global. Jangan hitung ulang
+    # per tab BMIV karena itu membuat perpindahan filter lambat.
     sub = svc[svc["Kelompok"].eq(group)].copy()
 
     if sub.empty:
@@ -820,6 +858,7 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
 
     with c4:
         if inpatient:
+            # ALOS: jika kolom ALOS/Lama Rawat tersedia, gunakan aktual.
             d = filtered[filtered["_bmiv"].eq("BMIV-03")].copy()
             alos_col = find_col(d, ["alos", "lama rawat", "length of stay", "los"])
             if alos_col is not None and not d.empty:
@@ -831,6 +870,7 @@ def render_bmiv_tab(page_name, group, title, inpatient=False):
                 else:
                     st.info("Kolom ALOS tersedia tetapi tidak berisi angka.")
             else:
+                # fallback informatif: tidak mengarang ALOS
                 st.info("Kolom ALOS/Lama Rawat tidak tersedia pada workbook ini.")
 
             cost_case = total_cost / kasus if kasus else np.nan
@@ -875,6 +915,7 @@ if active_page == PAGES[6]:
     if base.empty:
         st.info("Tidak ada data PLKK pada filter.")
     else:
+
         a, b, c = st.columns(3)
         with a:
             top = base.nlargest(10, "Biaya").sort_values("Biaya")
@@ -957,6 +998,8 @@ if active_page == PAGES[9]:
             selected_case = st.selectbox("Case ID", case_ids)
             case = filtered[filtered["_case"].eq(selected_case)].copy().sort_values("_date")
 
+            # Total cost per record sudah dihitung saat upload. Jadi klik Case ID
+            # tidak perlu mengulang semua SERVICE_MAP.
             case_cost = float(case["__service_cost_total"].sum()) if "__service_cost_total" in case.columns else 0.0
 
             c1,c2,c3,c4 = st.columns(4)
