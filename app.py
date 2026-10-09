@@ -221,7 +221,8 @@ def hbar(df, x, y, color, title=None, fmt="rp"):
 
 
 NUM = st.column_config.NumberColumn
-RP = lambda label: NUM(label, format="localized")  # noqa: E731
+# Menggunakan format kustom Indonesia (titik sebagai pemisah ribuan, koma sebagai desimal) pada column_config Streamlit
+RP = lambda label: NUM(label, format=",.1f" if "Unit" in label or "Util" in label or "Cost" in label else ",.0f")  # noqa: E731
 
 
 # ----------------------------------------------------------------------------
@@ -286,8 +287,8 @@ def view_trend(L, pers):
     T["uc"] = (T.bi / T.kun.replace(0, np.nan)).fillna(0)
     st.subheader("Rekap Bulanan")
     st.dataframe(T[["Bulan", "pes", "kas", "kun", "bi", "uc", "ut", "mom"]], hide_index=True, width="stretch",
-                 column_config={"pes": RP("Peserta"), "kas": RP("Kasus"), "kun": RP("Kunjungan"), "bi": RP("Biaya"),
-                                "uc": RP("Unit Cost"), "ut": NUM("Util /1.000", format="%.1f"),
+                 column_config={"pes": NUM("Peserta", format="localized"), "kas": NUM("Kasus", format="localized"), "kun": NUM("Kunjungan", format="localized"), "bi": NUM("Biaya", format="localized"),
+                                "uc": NUM("Unit Cost", format="localized"), "ut": NUM("Util /1.000", format=".,1f"),
                                 "mom": NUM("Δ Biaya MoM", format="percent")})
 
 
@@ -334,17 +335,17 @@ def view_bmiv(L, C, b, m):
     G["pct"] = G.biaya / G.biaya.sum()
     G["uc"] = (G.biaya / G.vol.replace(0, np.nan)).fillna(0)
     st.dataframe(G.rename(columns={"kode": "Kode", "komponen": "Komponen"}), hide_index=True, width="stretch",
-                 column_config={"vol": RP("Volume"), "biaya": RP("Biaya"), "pct": NUM("% Biaya", format="percent"),
-                                "uc": RP("Unit Cost")})
+                 column_config={"vol": NUM("Volume", format="localized"), "biaya": NUM("Biaya", format="localized"), "pct": NUM("% Biaya", format="percent"),
+                                "uc": NUM("Unit Cost", format="localized")})
     if b == 2:
         st.subheader("ALOS per Kelas Rawat")
         K = Lb.groupby("kelas").agg(kasus=("id", "count"), hari=("los", "sum"), biaya=("total", "sum")).reset_index()
         K["alos"] = K.hari / K.kasus
         K["bpk"] = K.biaya / K.kasus
         st.dataframe(K, hide_index=True, width="stretch",
-                     column_config={"kelas": "Kelas", "kasus": RP("Kasus"), "hari": RP("Hari Rawat"),
-                                    "alos": NUM("ALOS (hari)", format="%.1f"), "biaya": RP("Biaya"),
-                                    "bpk": RP("Biaya / Kasus")})
+                     column_config={"kelas": "Kelas", "kasus": NUM("Kasus", format="localized"), "hari": NUM("Hari Rawat", format="localized"),
+                                    "alos": NUM("ALOS (hari)", format=".,1f"), "biaya": NUM("Biaya", format="localized"),
+                                    "bpk": NUM("Biaya / Kasus", format="localized")})
 
 
 def view_plkk(L, m):
@@ -367,9 +368,9 @@ def view_plkk(L, m):
     hbar(T, key, "plkk", "#0f766e", fmt="n" if key == "kun" else "rp")
     st.subheader(f"Rekapitulasi PLKK ({len(R)} PLKK)")
     st.dataframe(R.sort_values("bi", ascending=False), hide_index=True, width="stretch",
-                 column_config={"plkk": "PLKK", "pes": RP("Peserta"), "kas": RP("Kasus"), "kun": RP("Kunjungan"),
-                                "bi": RP("Total Biaya"), "uc": RP("Unit Cost"), "cpc": RP("Cost per Case"),
-                                "ut": NUM("Util /1.000", format="%.1f")})
+                 column_config={"plkk": "PLKK", "pes": NUM("Peserta", format="localized"), "kas": NUM("Kasus", format="localized"), "kun": NUM("Kunjungan", format="localized"),
+                                "bi": NUM("Total Biaya", format="localized"), "uc": NUM("Unit Cost", format="localized"), "cpc": NUM("Cost per Case", format="localized"),
+                                "ut": NUM("Util /1.000", format=".,1f")})
 
 
 def view_lbst(L, C, pers):
@@ -418,9 +419,9 @@ def view_uc(L, C, m):
     out["Layanan"] = out.b.map(lambda i: BS[i])
     st.dataframe(out[["Layanan", "komponen", "vol", "biaya", "pct", "uc", "ut", "pm"]], hide_index=True,
                  width="stretch",
-                 column_config={"komponen": "Komponen", "vol": RP("Volume"), "biaya": RP("Biaya"),
-                                "pct": NUM("% Proporsi", format="percent"), "uc": RP("Unit Cost"),
-                                "ut": NUM("Util /1.000", format="%.1f"), "pm": RP("PMPM")})
+                 column_config={"komponen": "Komponen", "vol": NUM("Volume", format="localized"), "biaya": NUM("Biaya", format="localized"),
+                                "pct": NUM("% Proporsi", format="percent"), "uc": NUM("Unit Cost", format="localized"),
+                                "ut": NUM("Util /1.000", format=".,1f"), "pm": NUM("PMPM", format="localized")})
 
 
 def view_case(E, C):
@@ -431,7 +432,7 @@ def view_case(E, C):
     if sel is None:
         st.markdown("**Kasus berbiaya tertinggi:**")
         st.dataframe(top.rename("Total Biaya").reset_index().rename(columns={"case": "Case ID"}), hide_index=True,
-                     column_config={"Total Biaya": RP("Total Biaya")})
+                     column_config={"Total Biaya": NUM("Total Biaya", format="localized")})
         return
     X = E[E["case"] == sel].sort_values(["tgl", "b"])
     cx = C[C.id.isin(X.id)]
@@ -461,7 +462,7 @@ def view_case(E, C):
     D = pd.DataFrame({"Tanggal": X.tgl.dt.strftime("%Y-%m-%d"), "Layanan": X.b.map(lambda i: BN[i]), "PLKK": X.plkk,
                       "Kunjungan ke": X.kunj_ke.replace(0, np.nan), "Komponen": [cn(i) for i in X.id],
                       "Biaya Disetujui": X.total})
-    st.dataframe(D, hide_index=True, width="stretch", column_config={"Biaya Disetujui": RP("Biaya Disetujui")})
+    st.dataframe(D, hide_index=True, width="stretch", column_config={"Biaya Disetujui": NUM("Biaya Disetujui", format="localized")})
 
 
 # ----------------------------------------------------------------------------
