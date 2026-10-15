@@ -11,6 +11,7 @@ contoh: Data_Dummy.xlsx) lewat sidebar.
 """
 from __future__ import annotations
 
+import html
 import io
 import re
 from pathlib import Path
@@ -345,6 +346,108 @@ def read_total(df: pd.DataFrame, b: int) -> tuple[np.ndarray, np.ndarray, str | 
     return M[:, a + o], M[:, d + o], note
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 2b. PROFIL LAYOUT Data_Dummy.xlsx  (posisi kolom ISI data yang sebenarnya)
+# ─────────────────────────────────────────────────────────────────────────────
+# Pada Data_Dummy.xlsx isi data TIDAK selalu sejajar dengan nama header:
+#   • BMIV-01 : sejajar penuh                                      (70 kolom)
+#   • BMIV-02 : pasangan [volume, biaya] mulai dari kolom 50 (header 'BIAYA (RP) [13]') bergeser
+#               +1 kolom; kolom 48-49 = subtotal penunjang (jumlah, biaya); Homecare tidak punya kolom
+#               biaya sendiri (bertabrakan dgn TOTAL DIAJUKAN)                                (68 kolom)
+#   • BMIV-03 : blok operatif (kecil→khusus) bergeser +1 kolom; setelah subtotal penunjang (kol 62-63)
+#               semua pasangan bergeser +1; TOTAL diajukan/disetujui/selisih ada di kolom 79/80/81
+#               (header-nya tertulis 78/79/80)                                                (84 kolom)
+#   • BMIV-04 : 9 pasangan [volume, biaya] dimulai kolom 22; kolom 39 (header 'JUMLAH KUNJUNGAN / UNIT')
+#               sebenarnya TOTAL RUPIAH disetujui, kolom 40 = jumlah unit                     (43 kolom)
+# Indeks di bawah 0-based, urut seperti kolom pada sheet.
+DUMMY_NCOLS = {0: 70, 1: 68, 2: 84, 3: 43}
+DUMMY_TOTAL_POS = {0: (65, 66), 1: (63, 64), 2: (79, 80), 3: (39, 39)}  # (diajukan, disetujui)
+
+
+def _dummy_layout(b: int, pos: dict) -> dict:
+    """kode komponen → (kolom volume, kolom biaya, flag). flag: ''|'resid'|'out'|'out_cond'."""
+    lay = {}
+    if b == 0:  # sejajar → pakai nama header
+        for kode, _n, _s, vcols, bcols in SPEC[0]:
+            lay[kode] = ([pos[_norm(c)] for c in vcols], [pos[_norm(c)] for c in bcols], "")
+    elif b == 1:
+        for i, x in enumerate(SPEC[1][:12]):          # RJTL-01..12  : (24,25) … (46,47)
+            lay[x[0]] = ([24 + 2 * i], [25 + 2 * i], "")
+        for j, x in enumerate(SPEC[1][12:18]):        # RJTL-13..18  : (50,51) … (60,61)
+            lay[x[0]] = ([50 + 2 * j], [51 + 2 * j], "")
+        lay["RJTL-19"] = ([62], [], "resid")          # Homecare: biaya = sisa terhadap TOTAL DIAJUKAN
+    elif b == 2:
+        lay.update({"RI-01": ([25], [26], ""), "RI-02": ([27, 28, 29], [31], ""), "RI-03": ([32], [33], ""),
+                    "RI-04": ([35], [36], "out"), "RI-05": ([37], [38], "out"), "RI-06": ([39], [40], "out"),
+                    "RI-07": ([41], [42], "out_cond"), "RI-08": ([44], [45], "")})
+        for i, k in enumerate(range(9, 17)):          # RI-09..16 : (46,47) … (60,61)
+            lay[f"RI-{k:02d}"] = ([46 + 2 * i], [47 + 2 * i], "")
+        lay.update({"RI-17": ([64], [65], ""), "RI-18": ([66], [67], ""), "RI-19": ([68], [69], ""),
+                    "RI-20": ([71], [72], ""), "RI-21": ([73], [74], ""), "RI-22": ([75], [76], ""),
+                    "RI-23": ([77], [78], "")})
+    else:
+        for i, x in enumerate(SPEC[3][:8]):           # AB-01..08 : (22,23) … (36,37)
+            lay[x[0]] = ([22 + 2 * i], [23 + 2 * i], "")
+        lay["AB-09"] = ([38], [], "")                 # RTW: kolom biaya = kolom total → tidak tersedia
+    return lay
+
+
+def read_dummy(df: pd.DataFrame, b: int):
+    """
+    Baca komponen & total memakai posisi kolom Data_Dummy. Return None bila struktur sheet tidak cocok
+    (→ loader memakai deteksi otomatis). Return (total disetujui, total diajukan, komponen, kode di luar total).
+    """
+    M = df.apply(pd.to_numeric, errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    if M.shape[1] != DUMMY_NCOLS[b]:
+        return None
+    i_dj, i_ds = DUMMY_TOTAL_POS[b]
+    dj, ds = M[:, i_dj], M[:, i_ds]
+    if b < 3:   # uji identitas: diajukan − disetujui = selisih (kolom tepat di sebelah kanan disetujui)
+        ok = dj > 0
+        if ok.sum() == 0 or (np.abs(dj - ds - M[:, i_ds + 1])[ok] <= 1).mean() < 0.9:
+            return None
+    elif M[:, 39].sum() < M[:, 40].sum():   # kolom 39 harus yang berisi nominal rupiah
+        return None
+    pos = {c: i for i, c in enumerate(df.columns)}
+    lay = _dummy_layout(b, pos)
+    n, comps, outside = len(M), [], set()
+    for kode, nama, sat, _v, _b in SPEC[b]:
+        vi, bi_, flag = lay[kode]
+        vol = M[:, vi].sum(axis=1) if vi else np.zeros(n)
+        cost = M[:, bi_].sum(axis=1) if bi_ else np.zeros(n)
+        if flag == "out_cond":
+            cost = np.where(vol > 0, cost, 0.0)
+        if flag.startswith("out"):
+            outside.add(kode)
+        comps.append([kode, nama, sat, vol, cost])
+    if b == 1:   # Homecare: sisa = diajukan − komponen lain − subtotal penunjang (kol 49)
+        others = sum(x[4] for x in comps[:-1])
+        resid = np.maximum(dj - others - M[:, 49], 0.0)
+        comps[-1][4] = np.where(comps[-1][3] > 0, resid, 0.0)
+    return ds, dj, [tuple(x) for x in comps], outside
+
+
+def _dummy_notes(b: int, comps: list, outside: set) -> list[str]:
+    key, out = SHEETS[b]["key"], []
+    if b >= 1:
+        out.append(f"{key}: posisi kolom isi data disesuaikan dengan layout Data_Dummy (isi data bergeser dari "
+                   "nama header; total dibaca dari kolom yang benar).")
+    if b in (1, 2):
+        out.append(f"{key}: TOTAL BIAYA pada file sudah memuat SUB TOTAL PENUNJANG sebagai tambahan (penunjang "
+                   "terhitung ganda). Biaya komponen dialokasikan proporsional terhadap Total Disetujui, sehingga "
+                   "dapat lebih besar dari angka mentah di kolom komponen.")
+    if outside:
+        ops = sum(float(x[4].sum()) for x in comps if x[0] in outside)
+        out.append(f"{key}: biaya tindakan operatif (Rp {fN(ops)}) terisi di kolom komponen tetapi TIDAK termasuk "
+                   "TOTAL BIAYA pada file → tidak dijumlahkan ke Total Biaya; hanya volumenya yang ditampilkan.")
+    if b == 3:
+        n = int((comps[-1][3] > 0).sum())
+        out.append(f"{key}: kolom biaya RTW bertabrakan dengan kolom total, sehingga {fN(n)} episode RTW tercatat "
+                   "tanpa nominal biaya. 'JUMLAH KUNJUNGAN / UNIT' berisi total Rp; 'JUMLAH JAMINAN (DISETUJUI)' "
+                   "berisi jumlah unit.")
+    return out
+
+
 def build_dataset(frames: dict) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     """
     Return:
@@ -373,24 +476,35 @@ def build_dataset(frames: dict) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
         ep["perusahaan"] = df["NAMA PERUSAHAAN"].astype(str).str.strip()
         ep["sektor"] = ep["perusahaan"].map(sektor_of)
         ep["diagnosa"] = df["DIAGNOSA"].astype(str).str.strip()
-        tot_arr, diaj_arr, tnote = read_total(df, b)
+        dm = read_dummy(df, b)   # layout Data_Dummy terdeteksi → posisi kolom eksplisit
+        if dm is not None:
+            tot_arr, diaj_arr, comps, outside = dm
+            shifted = []
+        else:                    # file lain → deteksi pergeseran kolom otomatis
+            tot_arr, diaj_arr, tnote = read_total(df, b)
+            if tnote:
+                warns.append(tnote)
+            comps, shifted = read_components(df, b, diaj_arr)
+            outside = set()
         ep["total"] = tot_arr
-        if tnote:
-            warns.append(tnote)
+        ep["diaj"] = diaj_arr if b < 3 else np.nan
+        ep["icd"] = df["KODE ICD-10"].astype(str).str.strip()
         ep["visit"] = pd.to_numeric(df[_norm(m["visit"])], errors="coerce") if "visit" in m else np.nan
         ep["los"] = pd.to_numeric(df[_norm(m["los"])], errors="coerce").fillna(0) if "los" in m else np.nan
         ep["kelas"] = df[_norm(m["kelas"])].astype(str) if "kelas" in m else ""
         ep["poli"] = df[_norm(m["poli"])].astype(str) if "poli" in m else ""
 
         # ── komponen layanan ──
-        comps, shifted = read_components(df, b, diaj_arr)
+        if dm is not None:
+            warns.extend(_dummy_notes(b, comps, outside))
         if shifted:
             warns.append(f"{m['key']}: komponen {', '.join(shifted)} terbaca dengan koreksi geser kolom "
                          "(isi data tidak sejajar dengan header template).")
         raw_sum = np.zeros(n)
         pieces = []
         for kode, nama, sat, vol, biaya in comps:
-            raw_sum += biaya
+            if kode not in outside:
+                raw_sum += biaya
             keep = (biaya > 0) | (vol > 0)
             if keep.any():
                 pieces.append(pd.DataFrame({
@@ -401,6 +515,8 @@ def build_dataset(frames: dict) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
             tot = ep["total"].to_numpy()
             scale = np.where(raw_sum > 0, tot / np.where(raw_sum > 0, raw_sum, 1), 0.0)
             c["biaya"] = c["biaya_raw"] * scale[c["_i"].to_numpy()]
+            if outside:   # komponen di luar total file: volume tetap, biaya tidak dialokasikan
+                c.loc[c["kode"].isin(outside), "biaya"] = 0.0
             comp_parts.append(c.drop(columns=["_i"]))
         ep_parts.append(ep)
 
@@ -518,15 +634,52 @@ def table(df: pd.DataFrame, fmts: dict | None = None, height: int | None = None,
             st.dataframe(t.style.format(tf, na_rep=""), use_container_width=True, hide_index=True)
 
 
+CSS = """
+<style>
+.kpi{border:1px solid rgba(128,128,128,.35);border-top:3px solid #0f766e;border-radius:12px;
+     background:rgba(128,128,128,.06);height:116px;padding:8px 10px;box-sizing:border-box;
+     display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+     overflow:hidden;margin-bottom:.6rem}
+.kpi-t{font-size:.8rem;font-weight:600;opacity:.75;line-height:1.2;max-width:100%}
+.kpi-v{font-size:1.5rem;font-weight:700;line-height:1.25;margin:4px 0 2px;max-width:100%;
+       overflow-wrap:anywhere}
+.kpi-v.sm{font-size:1.02rem;line-height:1.2}
+.kpi-s{font-size:.72rem;opacity:.65;line-height:1.2;max-width:100%;white-space:nowrap;
+       overflow:hidden;text-overflow:ellipsis}
+</style>
+"""
+
+
+def inject_css():
+    st.markdown(CSS, unsafe_allow_html=True)
+
+
 def kpis(items: list[tuple]):
+    """Kotak KPI: tinggi tetap, lebar sama dalam satu baris, isi rata tengah (simetris)."""
     cols = st.columns(len(items))
     for col, it in zip(cols, items):
-        title, val = it[0], it[1]
-        sub = it[2] if len(it) > 2 else ""
-        with col.container(border=True):
-            st.metric(title, val)
-            if sub:
-                st.caption(sub)
+        title, val = html.escape(str(it[0])), str(it[1])
+        sub = html.escape(str(it[2])) if len(it) > 2 and it[2] != "" else "&nbsp;"
+        cls = "kpi-v sm" if len(val) > 16 else "kpi-v"
+        col.markdown(f"<div class='kpi'><div class='kpi-t'>{title}</div>"
+                     f"<div class='{cls}'>{html.escape(val)}</div><div class='kpi-s'>{sub}</div></div>",
+                     unsafe_allow_html=True)
+
+
+def insight_box(items: list[str], limit: int = 8):
+    """Kotak insight otomatis (2 kolom). Teks boleh memakai **tebal** markdown."""
+    items = [i for i in items if i][:limit]
+    if not items:
+        return
+    with st.container(border=True):
+        st.markdown("**💡 Insight**")
+        if len(items) == 1:
+            st.markdown(f"- {items[0]}")
+            return
+        half = (len(items) + 1) // 2
+        c1, c2 = st.columns(2)
+        c1.markdown("\n".join(f"- {i}" for i in items[:half]))
+        c2.markdown("\n".join(f"- {i}" for i in items[half:]))
 
 
 def money_axis(fig: go.Figure, vmax: float, axis: str = "x"):
@@ -558,6 +711,294 @@ def empty():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 5b. INSIGHT OTOMATIS (dihitung dari data terfilter)
+# ─────────────────────────────────────────────────────────────────────────────
+def _x(v: float) -> str:
+    return f1(v) + "×"
+
+
+def ins_exec(L, C, m) -> list[str]:
+    out, tot = [], float(L["total"].sum())
+    if tot <= 0:
+        return out
+    bb = L.groupby("b")["total"].sum()
+    b = int(bb.idxmax())
+    out.append(f"**{BN[b]}** menyerap biaya terbesar: {fR(bb[b])} (**{fP(bb[b] / tot)}** dari total biaya).")
+    cs = L.groupby("kasus")["total"].sum().sort_values(ascending=False)
+    n10 = max(1, int(round(len(cs) * 0.1)))
+    out.append(f"**10% kasus teratas** ({fN(n10)} dari {fN(len(cs))} kasus) menyumbang **{fP(cs.head(n10).sum() / tot)}** "
+               "biaya — kandidat utama untuk review kasus berbiaya tinggi.")
+    if not C.empty:
+        t = (C.assign(lbl=C["komponen"] + " (" + C["b"].map(dict(enumerate(BS))) + ")")
+             .groupby("lbl")["biaya"].sum().sort_values(ascending=False))
+        if t.sum() > 0:
+            out.append(f"Komponen terbesar: **{t.index[0]}** — {fR(t.iloc[0])} ({fP(t.iloc[0] / t.sum())} dari biaya komponen).")
+    dx = L.groupby("diagnosa")["total"].sum().sort_values(ascending=False)
+    out.append(f"Diagnosa berbiaya tertinggi: **{dx.index[0]}** ({fP(dx.iloc[0] / tot)}); 3 diagnosa teratas "
+               f"mencakup {fP(dx.head(3).sum() / tot)} biaya.")
+    pm = L.groupby("periode")["total"].sum()
+    if len(pm) >= 2:
+        out.append(f"Bulan dengan biaya tertinggi: **{ml(pm.idxmax())}** ({fR(pm.max())}); rata-rata bulanan {fR(pm.mean())}.")
+    nb = L.groupby("kasus")["b"].nunique()
+    if len(nb):
+        multi = float((nb > 1).mean())
+        c_multi = L[L["kasus"].isin(nb[nb > 1].index)].groupby("kasus")["total"].sum().mean() if (nb > 1).any() else 0.0
+        c_single = L[L["kasus"].isin(nb[nb == 1].index)].groupby("kasus")["total"].sum().mean() if (nb == 1).any() else 0.0
+        if multi > 0 and c_single > 0:
+            out.append(f"**{fP(multi)}** kasus melewati ≥2 jenis layanan; biaya per kasusnya {_x(c_multi / c_single)} "
+                       "kasus yang hanya satu jenis layanan.")
+    Lx = L[L["diaj"].notna()]
+    dsum = float(Lx["diaj"].sum())
+    if dsum > 0:
+        out.append(f"Rasio persetujuan (BMIV-01 s.d. 03) **{fP(Lx['total'].sum() / dsum)}**; {fR(dsum - Lx['total'].sum())} "
+                   "dari biaya diajukan tidak disetujui.")
+    jk = L.groupby("jenis_kasus").agg(bi=("total", "sum"), kas=("kasus", "nunique"))
+    jk = jk[jk["kas"] > 0]
+    if len(jk) >= 2:
+        jk["cpc"] = jk["bi"] / jk["kas"]
+        h, avg = jk["cpc"].idxmax(), L["total"].sum() / L["kasus"].nunique()
+        out.append(f"Jenis kasus **{h}** punya biaya per kasus tertinggi ({fR(jk.loc[h, 'cpc'])}, "
+                   f"{_x(jk.loc[h, 'cpc'] / avg)} rata-rata).")
+    return out
+
+
+def ins_trend(L, periods) -> list[str]:
+    out = []
+    mon = L.groupby("periode")["total"].sum().reindex(periods, fill_value=0.0)
+    vis = L.groupby("periode").size().reindex(periods, fill_value=0)
+    if len(mon) < 2 or mon.sum() <= 0:
+        return out
+    out.append(f"Puncak biaya di **{ml(mon.idxmax())}** ({fR(mon.max())}), terendah di **{ml(mon.idxmin())}** "
+               f"({fR(mon.min())}); rata-rata {fR(mon.mean())} per bulan.")
+    if mon.iloc[-2] > 0:
+        ch = mon.iloc[-1] / mon.iloc[-2] - 1
+        out.append(f"Biaya {ml(periods[-1])} **{'naik' if ch >= 0 else 'turun'} {f1(abs(ch) * 100)}%** dibanding {ml(periods[-2])}.")
+    pc = mon.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    if len(pc) >= 2:
+        out.append(f"Lonjakan MoM terbesar: **{ml(pc.idxmax())}** (+{f1(pc.max() * 100)}%); penurunan terdalam: "
+                   f"**{ml(pc.idxmin())}** ({f1(pc.min() * 100)}%).")
+    if len(mon) >= 4:
+        h = len(mon) // 2
+        a1, a2 = mon.iloc[:h].mean(), mon.iloc[h:].mean()
+        if a1 > 0:
+            out.append(f"Rata-rata bulanan paruh akhir periode **{'lebih tinggi' if a2 >= a1 else 'lebih rendah'} "
+                       f"{f1(abs(a2 / a1 - 1) * 100)}%** dibanding paruh awal.")
+    uc = (mon / vis.replace(0, np.nan)).dropna()
+    if len(uc):
+        out.append(f"Unit cost tertinggi pada **{ml(uc.idxmax())}** ({fF(uc.max())}/kunjungan) vs terendah "
+                   f"{ml(uc.idxmin())} ({fF(uc.min())}).")
+    bm = L.groupby(["periode", "b"])["total"].sum().unstack(fill_value=0.0)
+    if not bm.empty:
+        lead = bm.idxmax(axis=1).value_counts()
+        out.append(f"**{BN[int(lead.index[0])]}** menjadi layanan berbiaya terbesar di {fN(lead.iloc[0])} dari {fN(len(bm))} bulan.")
+    return out
+
+
+def ins_bmiv(L, C, b, m, cg, a) -> list[str]:
+    out, tot = [], a["bi"]
+    if tot <= 0:
+        return out
+    s = float(cg["bi"].sum()) if not cg.empty else 0.0
+    if s > 0:
+        t = cg.iloc[0]
+        out.append(f"**{t['komponen']}** komponen terbesar: {fR(t['bi'])} (**{fP(t['bi'] / s)}**); 3 komponen teratas "
+                   f"= {fP(cg['bi'].head(3).sum() / s)} biaya {BS[b]}.")
+    dx = L.groupby("diagnosa").agg(bi=("total", "sum"), kas=("kasus", "nunique")).sort_values("bi", ascending=False)
+    if not dx.empty:
+        out.append(f"Diagnosa **{dx.index[0]}** menyerap biaya terbesar ({fR(dx['bi'].iloc[0])}, "
+                   f"{fP(dx['bi'].iloc[0] / tot)}) dari {fN(dx['kas'].iloc[0])} kasus.")
+        r = dx[dx["kas"] >= 5].copy()
+        if len(r) >= 2:
+            r["cpc"] = r["bi"] / r["kas"]
+            h = r["cpc"].idxmax()
+            if h == dx.index[0]:
+                out[-1] += f" Sekaligus biaya per kasus tertinggi ({fF(r.loc[h, 'cpc'])}, {_x(r.loc[h, 'cpc'] / a['cpc'])} rata-rata)."
+            else:
+                out.append(f"Biaya per kasus tertinggi: **{h}** ({fF(r.loc[h, 'cpc'])}), {_x(r.loc[h, 'cpc'] / a['cpc'])} "
+                           f"rata-rata {BS[b]}.")
+    # ── spesifik per kelompok layanan ──
+    if b == 0:
+        ks = L.groupby("kasus").size()
+        out.append(f"Rata-rata **{f1(ks.mean())} kunjungan per kasus**; {fN((ks >= 3).sum())} kasus ({fP((ks >= 3).mean())}) "
+                   "berkunjung ≥3 kali — pantau kunjungan berulang.")
+        ob = cg[cg["kode"] == "RJTP-03"]
+        if s > 0 and not ob.empty:
+            out.append(f"Obat/resep = **{fP(ob['bi'].iloc[0] / s)}** biaya RJTP ({fN(ob['vol'].iloc[0])} resep).")
+    elif b == 1:
+        pl = L.groupby("poli").agg(kun=("ep", "size"), bi=("total", "sum"))
+        if len(pl):
+            p1, p2 = pl["kun"].idxmax(), pl["bi"].idxmax()
+            out.append(f"Poli tersibuk **{p1}** ({fN(pl.loc[p1, 'kun'])} kunjungan, {fP(pl.loc[p1, 'kun'] / len(L))}); "
+                       f"biaya terbesar ada di poli **{p2}** ({fR(pl.loc[p2, 'bi'])}).")
+        hv = cg[cg["kode"].isin(["RJTL-08", "RJTL-09"])]
+        if s > 0 and hv["vol"].sum() > 0:
+            out.append(f"CT Scan & MRI hanya **{fP(hv['vol'].sum() / len(L))}** kunjungan namun menyerap "
+                       f"**{fP(hv['bi'].sum() / s)}** biaya RJTL.")
+        pen = cg[cg["kode"].isin([f"RJTL-{k:02d}" for k in range(5, 13)])]
+        if s > 0:
+            out.append(f"Penunjang (lab, radiologi, elektromedik, USG, dll) = **{fP(pen['bi'].sum() / s)}** biaya RJTL.")
+    elif b == 2:
+        los = L["los"]
+        out.append(f"ALOS **{f1(los.mean())} hari**; {fP((los >= 8).mean())} episode dirawat ≥8 hari; biaya rata-rata "
+                   f"{fF(tot / los.sum()) if los.sum() else '–'} per hari rawat.")
+        kg = L.groupby("kelas").agg(n=("ep", "size"), bi=("total", "sum"))
+        kg = kg[kg["n"] >= 3]
+        if len(kg) >= 2:
+            kg["cpc"] = kg["bi"] / kg["n"]
+            h = kg["cpc"].idxmax()
+            out.append(f"Kelas **{h}** punya biaya per kasus tertinggi ({fR(kg.loc[h, 'cpc'])}); terendah "
+                       f"**{kg['cpc'].idxmin()}** ({fR(kg['cpc'].min())}).")
+        icu = C[C["komponen"].str.startswith("ICU")]
+        if len(icu):
+            out.append(f"ICU/HCU dipakai pada **{fP(icu['ep'].nunique() / len(L))}** episode namun menyerap "
+                       f"**{fP(icu['biaya'].sum() / tot)}** biaya RANAP.")
+        op = C[C["kode"].isin(["RI-04", "RI-05", "RI-06", "RI-07"]) & (C["volume"] > 0)]
+        if len(op):
+            out.append(f"**{fP(op['ep'].nunique() / len(L))}** episode melibatkan tindakan operatif "
+                       f"({fN(op['ep'].nunique())} episode); biaya operatif tidak termasuk Total Biaya pada file.")
+    else:
+        if s > 0 and len(cg) > 1:
+            v = cg.sort_values("vol", ascending=False).iloc[0]
+            out.append(f"Alat bantu/layanan terbanyak: **{v['komponen']}** ({fN(v['vol'])} unit).")
+        u = cg[cg["vol"] >= 3].copy()
+        if len(u) >= 2:
+            u["ucc"] = u["bi"] / u["vol"]
+            h = u.sort_values("ucc").iloc[-1]
+            out.append(f"Unit cost tertinggi: **{h['komponen']}** ({fF(h['ucc'])}/unit), {_x(h['ucc'] / a['uc'])} "
+                       "rata-rata per episode.")
+        rtw = cg[cg["kode"] == "AB-09"]
+        if len(rtw):
+            out.append(f"Program RTW tercatat pada **{fN(rtw['vol'].iloc[0])}** episode "
+                       f"({fP(rtw['vol'].iloc[0] / len(L))}), nominal biayanya tidak tersedia pada file.")
+    pk = L.groupby("plkk")["total"].sum().sort_values(ascending=False)
+    if len(pk):
+        out.append(f"PLKK dengan biaya terbesar: **{pk.index[0]}** ({fP(pk.iloc[0] / tot)}); total {fN(len(pk))} PLKK aktif.")
+    kw = L.groupby("kanwil")["total"].sum().sort_values(ascending=False)
+    if len(kw) > 1:
+        out.append(f"Kanwil **{kw.index[0]}** berkontribusi {fP(kw.iloc[0] / tot)} biaya {BS[b]}.")
+    return out
+
+
+def ins_plkk(g, mt) -> list[str]:
+    out = []
+    tot = float(g["bi"].sum())
+    if g.empty or tot <= 0:
+        return out
+    top = g.sort_values("bi", ascending=False)
+    out.append(f"**{top['plkk'].iloc[0]}** berbiaya terbesar: {fR(top['bi'].iloc[0])} (**{fP(top['bi'].iloc[0] / tot)}**); "
+               f"3 PLKK teratas = {fP(top['bi'].head(3).sum() / tot)} dari {fN(len(g))} PLKK.")
+    kv = g.sort_values("kun", ascending=False).iloc[0]
+    out.append(f"Kunjungan terbanyak: **{kv['plkk']}** ({fN(kv['kun'])} kunjungan, {fP(kv['kun'] / g['kun'].sum())}).")
+    r = g[g["kun"] >= 5]
+    if len(r) >= 3:
+        h = r.sort_values("uc").iloc[-1]
+        out.append(f"Unit cost tertinggi: **{h['plkk']}** ({fF(h['uc'])}), {_x(h['uc'] / r['uc'].median())} median PLKK "
+                   f"({fF(r['uc'].median())}).")
+        c = r.sort_values("cpc").iloc[-1]
+        out.append(f"Cost per case tertinggi: **{c['plkk']}** ({fF(c['cpc'])}) vs median {fF(r['cpc'].median())}.")
+        u = r.sort_values("ut").iloc[-1]
+        out.append(f"Utilisasi tertinggi: **{u['plkk']}** ({f1(u['ut'])} kunjungan / 1.000 peserta).")
+    out.append(f"Rata-rata biaya per PLKK {fR(g['bi'].mean())}; median {fR(g['bi'].median())} — "
+               f"{'sebaran condong ke beberapa PLKK besar' if g['bi'].mean() > 1.3 * g['bi'].median() else 'sebaran relatif merata'}.")
+    return out
+
+
+def ins_lbst(X, periods, val) -> list[str]:
+    out = []
+    if X.empty or float(X[val].sum()) <= 0:
+        return out
+    f = fR if val == "biaya" else fN
+    tot = float(X[val].sum())
+    cp = X.groupby(["b", "komponen"])[val].sum().sort_values(ascending=False)
+    (bb, nm), v = cp.index[0], cp.iloc[0]
+    out.append(f"**{nm}** ({BS[bb]}) komponen terbesar: {f(v)} (**{fP(v / tot)}**); 5 teratas = {fP(cp.head(5).sum() / tot)}.")
+    lb = X.groupby("b")[val].sum()
+    out.append(f"Layanan dominan: **{BN[int(lb.idxmax())]}** ({fP(lb.max() / tot)} dari total).")
+    mon = X.groupby("periode")[val].sum().reindex(periods, fill_value=0.0)
+    if len(mon) >= 2:
+        out.append(f"Bulan puncak **{ml(mon.idxmax())}** ({f(mon.max())}); terendah {ml(mon.idxmin())} ({f(mon.min())}).")
+    if len(periods) >= 6:
+        pv = X.pivot_table(index=["b", "komponen"], columns="periode", values=val, aggfunc="sum", fill_value=0.0)
+        pv = pv.reindex(columns=periods, fill_value=0.0)
+        first, last = pv[periods[:3]].sum(axis=1), pv[periods[-3:]].sum(axis=1)
+        d = (last - first).sort_values()
+        if d.iloc[-1] > 0:
+            (b1, n1) = d.index[-1]
+            out.append(f"Kenaikan terbesar (3 bulan akhir vs 3 bulan awal): **{n1}** ({BS[b1]}), naik {f(d.iloc[-1])}.")
+        if d.iloc[0] < 0:
+            (b2, n2) = d.index[0]
+            out.append(f"Penurunan terbesar: **{n2}** ({BS[b2]}), turun {f(abs(d.iloc[0]))}.")
+    out.append(f"Tercatat **{fN(len(cp))}** komponen layanan aktif dari {fN(X['b'].nunique())} kelompok BMIV.")
+    return out
+
+
+def ins_uc(L, cg, a, m) -> list[str]:
+    out = []
+    if cg.empty or a["bi"] <= 0:
+        return out
+    p = cg.sort_values("pmpm", ascending=False).iloc[0]
+    out.append(f"**{p['lbl']}** penyumbang PMPM terbesar: {fF(p['pmpm'])} (**{fP(p['pmpm'] / a['pm']) if a['pm'] else '–'}** dari PMPM {fF(a['pm'])}).")
+    u = cg[cg["vol"] >= 3]
+    if len(u) >= 2:
+        h = u.sort_values("ucc").iloc[-1]
+        out.append(f"Unit cost tertinggi: **{h['lbl']}** ({fF(h['ucc'])}), {_x(h['ucc'] / a['uc'])} rata-rata unit cost keseluruhan "
+                   f"({fF(a['uc'])}).")
+    if a["pes"]:
+        ut = (cg["vol"] / a["pes"] * 1000).sort_values(ascending=False)
+        i = ut.index[0]
+        out.append(f"Utilisasi tertinggi: **{cg.loc[i, 'lbl']}** ({f1(ut.iloc[0])} unit / 1.000 peserta).")
+    top3 = cg.head(3)
+    out.append(f"3 komponen teratas ({', '.join(top3['komponen'])}) = **{fP(top3['bi'].sum() / a['bi'])}** total biaya.")
+    out.append(f"Cost per case {fF(a['cpc'])} dengan rata-rata **{f1(a['kun'] / a['kas'] if a['kas'] else 0)} kunjungan per kasus**.")
+    return out
+
+
+def ins_case_all(eps) -> list[str]:
+    out = []
+    cs = eps.groupby("kasus").agg(bi=("total", "sum"), n=("ep", "size"), nb=("b", "nunique")).sort_values("bi", ascending=False)
+    tot = float(cs["bi"].sum())
+    if cs.empty or tot <= 0:
+        return out
+    out.append(f"12 kasus teratas menyumbang **{fP(cs['bi'].head(12).sum() / tot)}** biaya dari {fN(len(cs))} kasus.")
+    out.append(f"Rata-rata biaya per kasus {fR(cs['bi'].mean())} vs median {fR(cs['bi'].median())} — "
+               f"{'distribusi condong kanan: sedikit kasus sangat mahal' if cs['bi'].mean() > 1.3 * cs['bi'].median() else 'distribusi relatif merata'}.")
+    mx = cs["n"].idxmax()
+    out.append(f"Kasus dengan layanan terbanyak: **{mx}** ({fN(cs.loc[mx, 'n'])} episode, biaya {fR(cs.loc[mx, 'bi'])}).")
+    ri = set(eps.loc[eps["b"] == 2, "kasus"])
+    if ri:
+        a_ri, a_no = cs.loc[cs.index.isin(ri), "bi"].mean(), cs.loc[~cs.index.isin(ri), "bi"].mean()
+        if a_no > 0:
+            out.append(f"Kasus yang berujung rawat inap ({fP(len(ri) / len(cs))}) berbiaya {_x(a_ri / a_no)} kasus tanpa rawat inap.")
+    out.append(f"**{fP((cs['nb'] > 1).mean())}** kasus melibatkan ≥2 jenis layanan BMIV.")
+    return out
+
+
+def ins_case_one(E, cc, eps) -> list[str]:
+    out = []
+    t = float(E["total"].sum())
+    avg = float(eps.groupby("kasus")["total"].sum().mean())
+    if avg > 0:
+        out.append(f"Biaya kasus ini **{_x(t / avg)}** rata-rata biaya per kasus ({fR(avg)}).")
+    bb = E.groupby("b")["total"].sum()
+    if t > 0:
+        out.append(f"**{BN[int(bb.idxmax())]}** mendominasi biaya kasus ({fP(bb.max() / t)}).")
+    seq = []
+    for x in E["b"]:
+        if not seq or seq[-1] != x:
+            seq.append(x)
+    out.append("Alur layanan: " + " → ".join(BS[int(x)] for x in seq) + f" ({len(E)} episode).")
+    days = (E["tgl"].max() - E["tgl"].min()).days
+    out.append(f"Melibatkan **{E['plkk'].nunique()} PLKK** dalam rentang **{days} hari**.")
+    if not cc.empty and cc["biaya"].sum() > 0:
+        k = cc.groupby("komponen")["biaya"].sum().sort_values(ascending=False)
+        out.append(f"Komponen termahal: **{k.index[0]}** ({fR(k.iloc[0])}, {fP(k.iloc[0] / k.sum())} biaya komponen).")
+    if (E["b"] == 2).any():
+        r = E[E["b"] == 2]
+        out.append(f"Rawat inap **{fN(r['los'].sum())} hari** dengan biaya {fR(r['total'].sum())}.")
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 6. TAB-TAB DASHBOARD
 # ─────────────────────────────────────────────────────────────────────────────
 def tab_exec(L, C, m):
@@ -566,6 +1007,7 @@ def tab_exec(L, C, m):
           ("Kunjungan", fN(a["kun"]), "episode layanan"), ("Total Biaya", fR(a["bi"]), fF(a["bi"])),
           ("Unit Cost", fF(a["uc"]), "biaya / kunjungan"),
           ("PMPM", fF(a["pm"]), f"biaya / peserta / bulan ({m} bln)")])
+    insight_box(ins_exec(L, C, m))
     c1, c2 = st.columns(2)
     with c1.container(border=True):
         st.markdown("**Komposisi Biaya per Kelompok Pelayanan (BMIV)**")
@@ -594,6 +1036,7 @@ def tab_trend(L, periods, m):
         a = agg(X, 1)
         rows.append(dict(p=p, X=X, pes=a["pes"], tot=a))
     labels = [ml(p) for p in periods]
+    insight_box(ins_trend(L, periods))
 
     def val(o, b):
         X = o["X"] if b < 0 else o["X"][o["X"].b == b]
@@ -636,6 +1079,15 @@ def tab_trend(L, periods, m):
                    "Δ Biaya MoM": lambda v: ("+" if v >= 0 else "") + f1(v * 100) + "%"})
 
 
+def _dx_table(L: pd.DataFrame) -> pd.DataFrame:
+    g = (L.groupby("diagnosa")
+         .agg(icd=("icd", "first"), bi=("total", "sum"), kas=("kasus", "nunique"), kun=("ep", "size"))
+         .reset_index())
+    ok = ~g["icd"].isin(["", "nan", "None"])
+    g["lbl"] = np.where(ok, g["diagnosa"] + " (" + g["icd"] + ")", g["diagnosa"])
+    return g
+
+
 def tab_bmiv(L, C, b, m):
     L = L[L.b == b]
     if L.empty:
@@ -644,12 +1096,16 @@ def tab_bmiv(L, C, b, m):
     a = agg(L, m)
     cg = cagg(C)
     st.markdown(f"**{BN[b]}** — {BD[b]}")
-    items = [("Total Biaya", fR(a["bi"]), fF(a["bi"])), ("Kunjungan / Episode", fN(a["kun"])),
-             ("Kasus", fN(a["kas"])), ("Peserta", fN(a["pes"])), ("Unit Cost", fF(a["uc"]), "biaya / kunjungan")]
+    items = [("Total Biaya", fR(a["bi"]), fF(a["bi"])), ("Kunjungan / Episode", fN(a["kun"]), "episode layanan"),
+             ("Kasus", fN(a["kas"]), "No. Kasus KK unik"), ("Peserta", fN(a["pes"]), "NO KPJ unik"),
+             ("Unit Cost", fF(a["uc"]), "biaya / kunjungan")]
     if b == 2:
         h = float(L["los"].sum())
         items.append(("ALOS", f1(h / len(L)) + " hari", f"total {fN(h)} hari rawat"))
+    else:
+        items.append(("PMPM", fF(a["pm"]), f"biaya / peserta / bulan ({m} bln)"))
     kpis(items)
+    insight_box(ins_bmiv(L, C, b, m, cg, a))
     c1, c2 = st.columns(2)
     with c1.container(border=True):
         st.markdown("**Biaya per Komponen**")
@@ -668,9 +1124,26 @@ def tab_bmiv(L, C, b, m):
             t = L["poli"].value_counts().head(10)
             hbar(t.index, t.values, BC[1], fmt=fN, axis_money=False)
         else:
-            st.markdown("**Top Diagnosa (biaya)**")
-            t = L.groupby("diagnosa")["total"].sum().sort_values(ascending=False).head(10)
-            hbar(t.index, t.values, BC[b])
+            st.markdown("**Tren Biaya Bulanan**")
+            t = L.groupby("periode")["total"].sum().sort_index()
+            fig = go.Figure(go.Bar(x=[ml(p) for p in t.index], y=t.values, marker_color=BC[b],
+                                   hovertemplate="%{x}<br>Rp %{y:,.0f}<extra></extra>"))
+            money_axis(fig, float(t.max()) * 1.05 if len(t) else 0, "y")
+            fig.update_xaxes(type="category")
+            plot(fig, 340)
+    # ── Top Diagnosa (semua tab BMIV) ──
+    dx = _dx_table(L)
+    d1, d2 = st.columns(2)
+    with d1.container(border=True):
+        st.markdown("**Top 10 Diagnosa — Biaya**")
+        st.caption(f"Diagnosa dengan total biaya disetujui tertinggi di {BS[b]} (kode ICD-10 di dalam kurung)")
+        t = dx.sort_values("bi", ascending=False).head(10)
+        hbar(t["lbl"], t["bi"], BC[b], height=380)
+    with d2.container(border=True):
+        st.markdown("**Top 10 Diagnosa — Jumlah Kasus**")
+        st.caption("Diagnosa dengan No. Kasus KK unik terbanyak")
+        t = dx.sort_values(["kas", "bi"], ascending=False).head(10)
+        hbar(t["lbl"], t["kas"], BC[b], fmt=fN, axis_money=False, height=380)
     with st.container(border=True):
         st.markdown("**Rincian Komponen**")
         df = pd.DataFrame(dict(Kode=cg["kode"], Komponen=cg["komponen"], Volume=cg["vol"], Biaya=cg["bi"],
@@ -705,6 +1178,7 @@ def tab_plkk(L, m):
                 "Cost per Case": ("cpc", fF)}[mt]
     T = g[g["kun"] >= 5] if mt in ("Unit Cost", "Cost per Case") else g
     T = T.sort_values(col, ascending=False).head(15)
+    insight_box(ins_plkk(g, mt))
     with st.container(border=True):
         st.markdown("**Peringkat PLKK (Top 15)**")
         st.caption("Bandingkan PLKK pada level layanan yang sama (apple-to-apple) dengan memilih basis BMIV. "
@@ -723,6 +1197,7 @@ def tab_lbst(L, C, periods):
     sel = st.selectbox("Tampilkan", ["Biaya (Rp)", "Volume"], key="ls")
     val = "biaya" if sel.startswith("Biaya") else "volume"
     X = C[C.periode.isin(periods)]
+    insight_box(ins_lbst(X, periods, val))
     with st.container(border=True):
         st.markdown("**LB-ST — Rekapitulasi Layanan Aktual**")
         st.caption("Rekap layanan aktual per komponen × bulan dari BMIV-01 s.d. BMIV-04.")
@@ -754,6 +1229,7 @@ def tab_uc(L, C, m):
     cg["lbl"] = cg["komponen"] + " (" + cg["b"].map(dict(enumerate(BS))) + ")"
     cg["pmpm"] = cg["bi"] / (a["pes"] * m) if a["pes"] else 0.0
     cg["ucc"] = np.where(cg["vol"] > 0, cg["bi"] / cg["vol"].where(cg["vol"] > 0, 1), 0.0)
+    insight_box(ins_uc(L, cg, a, m))
     c1, c2 = st.columns(2)
     with c1.container(border=True):
         st.markdown("**Top 10 PMPM per Komponen**")
@@ -787,6 +1263,7 @@ def tab_case(eps, comp):
                  format_func=lambda x: "— pilih No. Kasus —" if x == "" else x)
     cur = st.session_state.get("case_sel", "")
     if not cur:
+        insight_box(ins_case_all(eps))
         with st.container(border=True):
             st.markdown("**Pilih Case ID**")
             st.caption("Pilih No. Kasus di atas, atau klik salah satu kasus berbiaya tertinggi:")
@@ -806,6 +1283,7 @@ def tab_case(eps, comp):
     kpis([("Total Biaya", fF(t)), ("Layanan / Episode", str(len(E))), ("PLKK Terlibat", str(E["plkk"].nunique())),
           ("Rentang", f"{days} hari", f"{E.tgl_s.iloc[0]} → {E.tgl_s.iloc[-1]}"),
           ("Jenis Kasus", first["jenis_kasus"], first["sektor"]), ("Diagnosa", first["diagnosa"], "KPJ " + first["kpj"])])
+    insight_box(ins_case_one(E, cc, eps))
     with st.container(border=True):
         st.markdown("**Timeline / Journey Layanan**")
         st.caption("Urut tanggal pelayanan / masuk RS")
@@ -848,6 +1326,7 @@ def reset_filters(dmin, dmax):
 
 def main():
     st.set_page_config(page_title="Dashboard Utilization Review PLKK", page_icon="🏥", layout="wide")
+    inject_css()
     _KEY[0] = 0
     sample = Path(__file__).with_name("Data_Dummy.xlsx")
 
