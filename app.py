@@ -536,8 +536,11 @@ def build_dataset(frames: dict) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     return eps.reset_index(drop=True), comp.reset_index(drop=True), warns
 
 
+CACHE_VER = 3   # naikkan bila struktur hasil build_dataset berubah (membuang cache lama)
+
+
 @st.cache_data(show_spinner="Membaca & menormalisasi data…")
-def load_data(content: bytes):
+def load_data(content: bytes, ver: int = CACHE_VER):
     frames, w1 = read_template(io.BytesIO(content))
     eps, comp, w2 = build_dataset(frames)
     return eps, comp, w1 + w2
@@ -747,8 +750,8 @@ def ins_exec(L, C, m) -> list[str]:
         if multi > 0 and c_single > 0:
             out.append(f"**{fP(multi)}** kasus melewati ≥2 jenis layanan; biaya per kasusnya {_x(c_multi / c_single)} "
                        "kasus yang hanya satu jenis layanan.")
-    Lx = L[L["diaj"].notna()]
-    dsum = float(Lx["diaj"].sum())
+    Lx = L[L["diaj"].notna()] if "diaj" in L.columns else L.iloc[0:0]
+    dsum = float(Lx["diaj"].sum()) if len(Lx) else 0.0
     if dsum > 0:
         out.append(f"Rasio persetujuan (BMIV-01 s.d. 03) **{fP(Lx['total'].sum() / dsum)}**; {fR(dsum - Lx['total'].sum())} "
                    "dari biaya diajukan tidak disetujui.")
@@ -1080,6 +1083,8 @@ def tab_trend(L, periods, m):
 
 
 def _dx_table(L: pd.DataFrame) -> pd.DataFrame:
+    if "icd" not in L.columns:
+        L = L.assign(icd="")
     g = (L.groupby("diagnosa")
          .agg(icd=("icd", "first"), bi=("total", "sum"), kas=("kasus", "nunique"), kun=("ep", "size"))
          .reset_index())
@@ -1345,7 +1350,7 @@ def main():
         st.stop()
 
     try:
-        eps, comp, warns = load_data(content)
+        eps, comp, warns = load_data(content, CACHE_VER)
     except TemplateError as e:
         st.error("File tidak sesuai template:")
         st.markdown(str(e))
@@ -1394,12 +1399,6 @@ def main():
     sb.caption(f"{fN(len(L))} dari {fN(len(eps))} baris terfilter")
 
     # ── Utilitas sidebar ──
-    with sb.expander("Catatan kualitas data", expanded=bool(warns)):
-        if warns:
-            for w in warns:
-                st.markdown(f"- {w}")
-        else:
-            st.markdown("Tidak ada catatan. Struktur kolom sesuai template.")
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
         eps.drop(columns=["tgl_s"]).to_excel(xw, sheet_name="Episode", index=False)
