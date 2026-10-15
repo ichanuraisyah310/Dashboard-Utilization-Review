@@ -1150,7 +1150,7 @@ def tab_bmiv(L, C, b, m):
     a = agg(L, m)
     cg = cagg(C)
     st.markdown(f"**{BN[b]}** — {BD[b]}")
-    items = [("Total Biaya", fR(a["bi"]), fF(a["bi"])), ("Kunjungan / Episode", fN(a["kun"]), "episode layanan"),
+    items = [("Total Biaya", fR(a["bi"]), fF(a["bi"])), ("Kunjungan", fN(a["kun"]), "episode layanan"),
              ("Kasus", fN(a["kas"]), "No. Kasus KK unik"), ("Peserta", fN(a["pes"]), "NO KPJ unik"),
              ("Unit Cost", fF(a["uc"]), "biaya / kunjungan")]
     if b == 2:
@@ -1333,7 +1333,7 @@ def tab_case(eps, comp):
     t = float(E["total"].sum())
     days = (E["tgl"].max() - E["tgl"].min()).days
     first = E.iloc[0]
-    kpis([("Total Biaya", fF(t)), ("Layanan / Episode", str(len(E))), ("PLKK Terlibat", str(E["plkk"].nunique())),
+    kpis([("Total Biaya", fF(t)), ("Layanan", str(len(E))), ("PLKK Terlibat", str(E["plkk"].nunique())),
           ("Rentang", f"{days} hari", f"{E.tgl_s.iloc[0]} → {E.tgl_s.iloc[-1]}"),
           ("Jenis Kasus", first["jenis_kasus"], first["sektor"]), ("Diagnosa", first["diagnosa"], "KPJ " + first["kpj"])])
     insight_box(ins_case_one(E, cc, eps))
