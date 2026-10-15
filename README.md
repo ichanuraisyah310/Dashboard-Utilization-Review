@@ -1,34 +1,15 @@
-# Dashboard JKK PLKK — Python 3.7 Compatible
+# Dashboard Utilization Review PLKK (Streamlit)
 
-Project ini sengaja memakai versi library yang masih kompatibel dengan Python 3.7.x.
-
-## Jalankan di VS Code
-
-Buka Terminal di folder project, lalu:
-
-```powershell
+## Menjalankan di VS Code
+```bash
 python -m venv .venv
-.venv\Scripts\activate
-python -m pip install --upgrade pip
+.venv\Scripts\activate          # Windows   (macOS/Linux: source .venv/bin/activate)
 pip install -r requirements.txt
 streamlit run app.py
 ```
+Browser terbuka di http://localhost:8501. Upload file Excel lewat sidebar.
 
-Jika PowerShell memblokir aktivasi environment, gunakan langsung:
-
-```powershell
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe -m streamlit run app.py
-```
-
-Upload `DATA TIRUAN.xlsx` pada dashboard.
-
-## Output
-- LB-ST dihitung dari BMIV-01 s.d. BMIV-04
-- Unit Cost setempat dan gabungan
-- Utilisasi per 1.000 TK per bulan
-- PMPM / unit cost per kapita
-- Grafik dan tabel detail
-- Download hasil Excel
-
-Kode cabang setempat default: `K00`.
+## Format file yang diterima
+Workbook `.xlsx` dengan sheet **BMIV-01, BMIV-02, BMIV-03, BMIV-04** (boleh berakhiran, mis. `_Dummy`)
+dan nama kolom sama persis dengan `Data_Dummy.xlsx`. Sheet lain (README, Column_Mapping, dst.) diabaikan.
+Jika tidak ada file yang di-upload, app memakai `Data_Dummy.xlsx` di folder yang sama.
