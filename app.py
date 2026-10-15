@@ -28,6 +28,12 @@ import streamlit as st
 BS = ["RJTP", "RJTL", "RANAP", "Khusus"]
 BN = ["BMIV-01 · RJTP", "BMIV-02 · RJTL", "BMIV-03 · RANAP", "BMIV-04 · Khusus"]
 BC = ["#2a9d8f", "#3b82f6", "#e9a23b", "#a855f7"]
+BD = [
+    "Rawat Jalan Tingkat Pertama — dokter umum, gigi, obat, penunjang diagnostik, tindakan medis.",
+    "Rawat Jalan Tingkat Lanjutan — dokter spesialis, laboratorium, radiologi, fisioterapi, ODC, emergensi.",
+    "Rawat Inap — akomodasi, operasi, ICU, transfusi, implan ortopedi, penunjang.",
+    "Pelayanan khusus & alat bantu — kaca mata, gigi palsu, protesis, ambulans, program RTW.",
+]
 MON = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 ACC = "#0f766e"
 
@@ -1114,30 +1120,24 @@ def _wrap(t: str, w: int = 18, maxlines: int = 3) -> str:
 
 
 def combo_dx(t: pd.DataFrame, color: str):
-    """Batang jumlah kasus (angka di dasar batang) + garis biaya (label berlatar putih) per diagnosa."""
+    """Batang jumlah kasus + titik biaya (sumbu kanan) per diagnosa."""
     t = t.reset_index(drop=True)
     labels = [_wrap(x) for x in t["lbl"]]
     kmax, bmax = float(t["kas"].max() or 1), float(t["bi"].max() or 1)
     fig = go.Figure()
     fig.add_bar(x=labels, y=t["kas"], name="Jumlah Kasus", marker_color=color, customdata=t["lbl"],
-                text=[fN(v) for v in t["kas"]], textposition="inside", insidetextanchor="start",
-                textfont=dict(color="#fff", size=13),
+                text=[fN(v) for v in t["kas"]], textposition="inside", insidetextanchor="end",
                 hovertemplate="%{customdata}<br>Kasus: %{y:,.0f}<extra></extra>")
-    fig.add_scatter(x=labels, y=t["bi"], name="Total Biaya (Rp)", mode="lines+markers", yaxis="y2",
+    fig.add_scatter(x=labels, y=t["bi"], name="Total Biaya (Rp)", mode="lines+markers+text", yaxis="y2",
                     line=dict(color="#ed7d31", width=3),
                     marker=dict(color="#ed7d31", size=9, line=dict(color="#fff", width=1.5)),
+                    text=[fR(v) for v in t["bi"]], textposition="top center", cliponaxis=False,
                     customdata=t["lbl"], hovertemplate="%{customdata}<br>Biaya: Rp %{y:,.0f}<extra></extra>")
-    for x, v in zip(labels, t["bi"]):       # label biaya dengan latar putih agar tidak tumpang tindih
-        fig.add_annotation(x=x, y=float(v), xref="x", yref="y2", text=f"<b>{fR(v)}</b>", showarrow=False,
-                           yshift=20, bgcolor="rgba(255,255,255,0.95)", bordercolor="#ed7d31", borderwidth=1,
-                           borderpad=3, font=dict(color="#7c2d12", size=12))
-    # satu bidang grafik: batang & garis berbagi area yang sama (combo), garis berada di atas batang
-    bt = np.linspace(0, bmax * 1.2, 6)
+    ticks = np.linspace(0, bmax * 1.3, 6)
     fig.update_layout(
-        yaxis=dict(title="Jumlah kasus", range=[0, kmax * 1.5], rangemode="tozero"),
-        yaxis2=dict(title="Biaya", overlaying="y", side="right", showgrid=False,
-                    range=[0, bmax * 1.2], tickvals=bt,
-                    ticktext=[fR(v).replace("Rp ", "") if v else "0" for v in bt]))
+        yaxis=dict(title="Jumlah kasus", range=[0, kmax * 1.3], rangemode="tozero"),
+        yaxis2=dict(title="Biaya", overlaying="y", side="right", showgrid=False, range=[0, bmax * 1.3],
+                    tickvals=ticks, ticktext=[fR(v).replace("Rp ", "") if v else "0" for v in ticks]))
     fig.update_xaxes(type="category", tickfont=dict(size=11))
     plot(fig, 480)
 
@@ -1150,7 +1150,7 @@ def tab_bmiv(L, C, b, m):
     a = agg(L, m)
     cg = cagg(C)
     st.markdown(f"**{BN[b]}** — {BD[b]}")
-    items = [("Total Biaya", fR(a["bi"]), fF(a["bi"])), ("Kunjungan / Episode", fN(a["kun"]), "episode layanan"),
+    items = [("Total Biaya", fR(a["bi"]), fF(a["bi"])), ("Kunjungan", fN(a["kun"]), "layanan"),
              ("Kasus", fN(a["kas"]), "No. Kasus KK"), ("Peserta", fN(a["pes"]), "NO KPJ"),
              ("Unit Cost", fF(a["uc"]), "biaya / kunjungan")]
     if b == 2:
@@ -1195,6 +1195,8 @@ def tab_bmiv(L, C, b, m):
     dx = _dx_table(L)
     with st.container(border=True):
         st.markdown("**Top 10 Diagnosa — Jumlah Kasus & Biaya**")
+        st.caption(f"Batang = jumlah kasus (No. Kasus KK, sumbu kiri); garis = total biaya disetujui "
+                   f"(sumbu kanan) di {BS[b]}. Kode ICD-10 di dalam kurung.")
         combo_dx(dx.sort_values(["kas", "bi"], ascending=False).head(10), BC[b])
     with st.container(border=True):
         st.markdown("**Rincian Komponen**")
@@ -1304,6 +1306,7 @@ def tab_uc(L, C, m):
 
 
 def tab_case(eps, comp):
+    st.caption("Case Explorer menelusuri seluruh data (tidak terpengaruh filter sidebar).")
     top = eps.groupby("kasus")["total"].sum().sort_values(ascending=False).head(12)
     cases = sorted(eps["kasus"].unique())
 
@@ -1330,7 +1333,7 @@ def tab_case(eps, comp):
     t = float(E["total"].sum())
     days = (E["tgl"].max() - E["tgl"].min()).days
     first = E.iloc[0]
-    kpis([("Total Biaya", fF(t)), ("Layanan / Episode", str(len(E))), ("PLKK Terlibat", str(E["plkk"].nunique())),
+    kpis([("Total Biaya", fF(t)), ("Layanan", str(len(E))), ("PLKK Terlibat", str(E["plkk"].nunique())),
           ("Rentang", f"{days} hari", f"{E.tgl_s.iloc[0]} → {E.tgl_s.iloc[-1]}"),
           ("Jenis Kasus", first["jenis_kasus"], first["sektor"]), ("Diagnosa", first["diagnosa"], "KPJ " + first["kpj"])])
     insight_box(ins_case_one(E, cc, eps))
