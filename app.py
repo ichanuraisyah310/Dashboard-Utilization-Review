@@ -1128,8 +1128,9 @@ def combo_dx(t: pd.DataFrame, color: str):
     fig.add_bar(x=labels, y=t["kas"], name="Jumlah Kasus", marker_color=color, customdata=t["lbl"],
                 text=[fN(v) for v in t["kas"]], textposition="inside", insidetextanchor="end",
                 hovertemplate="%{customdata}<br>Kasus: %{y:,.0f}<extra></extra>")
-    fig.add_scatter(x=labels, y=t["bi"], name="Total Biaya (Rp)", mode="markers+text", yaxis="y2",
-                    marker=dict(color="#e11d48", size=13, line=dict(color="#fff", width=1.5)),
+    fig.add_scatter(x=labels, y=t["bi"], name="Total Biaya (Rp)", mode="lines+markers+text", yaxis="y2",
+                    line=dict(color="#ed7d31", width=3),
+                    marker=dict(color="#ed7d31", size=9, line=dict(color="#fff", width=1.5)),
                     text=[fR(v) for v in t["bi"]], textposition="top center", cliponaxis=False,
                     customdata=t["lbl"], hovertemplate="%{customdata}<br>Biaya: Rp %{y:,.0f}<extra></extra>")
     ticks = np.linspace(0, bmax * 1.3, 6)
@@ -1194,7 +1195,7 @@ def tab_bmiv(L, C, b, m):
     dx = _dx_table(L)
     with st.container(border=True):
         st.markdown("**Top 10 Diagnosa — Jumlah Kasus & Biaya**")
-        st.caption(f"Batang = jumlah kasus (No. Kasus KK unik, sumbu kiri); titik = total biaya disetujui "
+        st.caption(f"Batang = jumlah kasus (No. Kasus KK unik, sumbu kiri); garis = total biaya disetujui "
                    f"(sumbu kanan) di {BS[b]}. Kode ICD-10 di dalam kurung.")
         combo_dx(dx.sort_values(["kas", "bi"], ascending=False).head(10), BC[b])
     with st.container(border=True):
@@ -1464,31 +1465,27 @@ def main():
 
     # ── Konten ──
     st.title("Dashboard Utilization Review PLKK")
-    # Hanya tab aktif yang dihitung & digambar → perpindahan filter/tab jauh lebih cepat
-    # (st.tabs merender semua 10 tab pada setiap perubahan filter).
-    names = ["Executive Summary", "Tren Bulanan", "BMIV-01 RJTP", "BMIV-02 RJTL", "BMIV-03 RANAP",
-             "BMIV-04 Khusus", "PLKK Performance", "LB-ST", "Unit Cost & Per Kapita", "Case Explorer"]
-    for k in ("tm", "pb", "pm", "ls", "ub", "case_sel"):      # jaga state widget saat pindah tab
-        if k in st.session_state:
-            st.session_state[k] = st.session_state[k]
-    active = st.radio("Menu", names, horizontal=True, key="tab_active", label_visibility="collapsed")
-    st.divider()
-    i = names.index(active)
-    if i == 9:
-        return tab_case(eps, comp)
+    tabs = st.tabs(["Executive Summary", "Tren Bulanan", "BMIV-01 RJTP", "BMIV-02 RJTL", "BMIV-03 RANAP",
+                    "BMIV-04 Khusus", "PLKK Performance", "LB-ST", "Unit Cost & Per Kapita", "Case Explorer"])
+    with tabs[9]:
+        tab_case(eps, comp)
     if L.empty:
-        return empty()
-    if i == 0:
+        for t in tabs[:9]:
+            with t:
+                empty()
+        return
+    with tabs[0]:
         tab_exec(L, C, m)
-    elif i == 1:
+    with tabs[1]:
         tab_trend(L, periods, m)
-    elif 2 <= i <= 5:
-        tab_bmiv(L, C, i - 2, m)
-    elif i == 6:
+    for b in range(4):
+        with tabs[2 + b]:
+            tab_bmiv(L, C, b, m)
+    with tabs[6]:
         tab_plkk(L, m)
-    elif i == 7:
+    with tabs[7]:
         tab_lbst(L, C, periods)
-    else:
+    with tabs[8]:
         tab_uc(L, C, m)
 
 
