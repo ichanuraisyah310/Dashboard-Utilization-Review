@@ -28,11 +28,6 @@ import streamlit as st
 BS = ["RJTP", "RJTL", "RANAP", "Khusus"]
 BN = ["BMIV-01 · RJTP", "BMIV-02 · RJTL", "BMIV-03 · RANAP", "BMIV-04 · Khusus"]
 BC = ["#2a9d8f", "#3b82f6", "#e9a23b", "#a855f7"]
-BD = [
-    "Rawat Jalan Tingkat Pertama — dokter umum, gigi, obat, penunjang diagnostik, tindakan medis.",
-    "Rawat Jalan Tingkat Lanjutan — dokter spesialis, laboratorium, radiologi, fisioterapi, ODC, emergensi.",
-    "Rawat Inap — akomodasi, operasi, ICU, transfusi, implan ortopedi, penunjang.",
-    "Pelayanan khusus & alat bantu — kaca mata, gigi palsu, protesis, ambulans, program RTW.",
 ]
 MON = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 ACC = "#0f766e"
