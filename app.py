@@ -1310,7 +1310,6 @@ def tab_uc(L, C, m):
 
 
 def tab_case(eps, comp):
-    st.caption("Case Explorer menelusuri seluruh data (tidak terpengaruh filter sidebar).")
     top = eps.groupby("kasus")["total"].sum().sort_values(ascending=False).head(12)
     cases = sorted(eps["kasus"].unique())
 
