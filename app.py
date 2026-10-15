@@ -28,7 +28,6 @@ import streamlit as st
 BS = ["RJTP", "RJTL", "RANAP", "Khusus"]
 BN = ["BMIV-01 · RJTP", "BMIV-02 · RJTL", "BMIV-03 · RANAP", "BMIV-04 · Khusus"]
 BC = ["#2a9d8f", "#3b82f6", "#e9a23b", "#a855f7"]
-]
 MON = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 ACC = "#0f766e"
 
