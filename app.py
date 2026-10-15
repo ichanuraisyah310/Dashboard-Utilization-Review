@@ -1155,7 +1155,6 @@ def tab_bmiv(L, C, b, m):
     C = C[C.b == b]
     a = agg(L, m)
     cg = cagg(C)
-    st.markdown(f"**{BN[b]}** — {BD[b]}")
     items = [("Total Biaya", fR(a["bi"]), fF(a["bi"])), ("Kunjungan / Episode", fN(a["kun"]), "episode layanan"),
              ("Kasus", fN(a["kas"]), "No. Kasus KK unik"), ("Peserta", fN(a["pes"]), "NO KPJ unik"),
              ("Unit Cost", fF(a["uc"]), "biaya / kunjungan")]
