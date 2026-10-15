@@ -1017,7 +1017,7 @@ def ins_case_one(E, cc, eps) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 def tab_exec(L, C, m):
     a = agg(L, m)
-    kpis([("Total Peserta", fN(a["pes"]), "NO KPJ unik"), ("Kasus", fN(a["kas"]), "No. Kasus KK unik"),
+    kpis([("Total Peserta", fN(a["pes"]), "NO KPJ"), ("Kasus", fN(a["kas"]), "No. Kasus KK"),
           ("Kunjungan", fN(a["kun"]), "episode layanan"), ("Total Biaya", fR(a["bi"]), fF(a["bi"])),
           ("Unit Cost", fF(a["uc"]), "biaya / kunjungan"),
           ("PMPM", fF(a["pm"]), f"biaya / peserta / bulan ({m} bln)")])
@@ -1156,7 +1156,7 @@ def tab_bmiv(L, C, b, m):
     a = agg(L, m)
     cg = cagg(C)
     items = [("Total Biaya", fR(a["bi"]), fF(a["bi"])), ("Kunjungan / Episode", fN(a["kun"]), "episode layanan"),
-             ("Kasus", fN(a["kas"]), "No. Kasus KK unik"), ("Peserta", fN(a["pes"]), "NO KPJ unik"),
+             ("Kasus", fN(a["kas"]), "No. Kasus KK"), ("Peserta", fN(a["pes"]), "NO KPJ"),
              ("Unit Cost", fF(a["uc"]), "biaya / kunjungan")]
     if b == 2:
         h = float(L["los"].sum())
