@@ -546,6 +546,17 @@ def load_data(content: bytes, ver: int = CACHE_VER):
     return eps, comp, w1 + w2
 
 
+@st.cache_data(show_spinner=False)
+def export_xlsx(content: bytes, ver: int = CACHE_VER) -> bytes:
+    """File ternormalisasi dibuat sekali per file upload (bukan di setiap perubahan filter)."""
+    eps, comp, _ = load_data(content, ver)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        eps.drop(columns=["tgl_s"]).to_excel(xw, sheet_name="Episode", index=False)
+        comp.drop(columns=["tgl"]).to_excel(xw, sheet_name="Komponen", index=False)
+    return buf.getvalue()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. FORMATTER (format Indonesia)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1093,6 +1104,43 @@ def _dx_table(L: pd.DataFrame) -> pd.DataFrame:
     return g
 
 
+def _wrap(t: str, w: int = 18, maxlines: int = 3) -> str:
+    words, lines, cur = str(t).split(), [], ""
+    for wd in words:
+        if cur and len(cur) + 1 + len(wd) > w:
+            lines.append(cur)
+            cur = wd
+        else:
+            cur = f"{cur} {wd}".strip()
+    lines.append(cur)
+    if len(lines) > maxlines:
+        lines = lines[:maxlines]
+        lines[-1] = lines[-1][: max(0, w - 1)] + "…"
+    return "<br>".join(lines)
+
+
+def combo_dx(t: pd.DataFrame, color: str):
+    """Batang jumlah kasus + titik biaya (sumbu kanan) per diagnosa."""
+    t = t.reset_index(drop=True)
+    labels = [_wrap(x) for x in t["lbl"]]
+    kmax, bmax = float(t["kas"].max() or 1), float(t["bi"].max() or 1)
+    fig = go.Figure()
+    fig.add_bar(x=labels, y=t["kas"], name="Jumlah Kasus", marker_color=color, customdata=t["lbl"],
+                text=[fN(v) for v in t["kas"]], textposition="inside", insidetextanchor="end",
+                hovertemplate="%{customdata}<br>Kasus: %{y:,.0f}<extra></extra>")
+    fig.add_scatter(x=labels, y=t["bi"], name="Total Biaya (Rp)", mode="markers+text", yaxis="y2",
+                    marker=dict(color="#e11d48", size=13, line=dict(color="#fff", width=1.5)),
+                    text=[fR(v) for v in t["bi"]], textposition="top center", cliponaxis=False,
+                    customdata=t["lbl"], hovertemplate="%{customdata}<br>Biaya: Rp %{y:,.0f}<extra></extra>")
+    ticks = np.linspace(0, bmax * 1.3, 6)
+    fig.update_layout(
+        yaxis=dict(title="Jumlah kasus", range=[0, kmax * 1.3], rangemode="tozero"),
+        yaxis2=dict(title="Biaya", overlaying="y", side="right", showgrid=False, range=[0, bmax * 1.3],
+                    tickvals=ticks, ticktext=[fR(v).replace("Rp ", "") if v else "0" for v in ticks]))
+    fig.update_xaxes(type="category", tickfont=dict(size=11))
+    plot(fig, 480)
+
+
 def tab_bmiv(L, C, b, m):
     L = L[L.b == b]
     if L.empty:
@@ -1111,44 +1159,44 @@ def tab_bmiv(L, C, b, m):
         items.append(("PMPM", fF(a["pm"]), f"biaya / peserta / bulan ({m} bln)"))
     kpis(items)
     insight_box(ins_bmiv(L, C, b, m, cg, a))
-    c1, c2 = st.columns(2)
-    with c1.container(border=True):
-        st.markdown("**Biaya per Komponen**")
-        top = cg.head(15)
-        hbar(top["komponen"], top["bi"], BC[b])
-    with c2.container(border=True):
-        if b == 2:
-            st.markdown("**Distribusi ALOS (hari rawat)**")
-            bk = [("1–3", 1, 3), ("4–7", 4, 7), ("8–10", 8, 10), ("11–14", 11, 14), ("15+", 15, 999)]
-            fig = go.Figure(go.Bar(x=[x[0] + " hr" for x in bk],
-                                   y=[int(((L.los >= lo) & (L.los <= hi)).sum()) for _, lo, hi in bk],
-                                   marker_color=BC[2], name="Kasus"))
-            plot(fig, 340)
-        elif b == 1:
-            st.markdown("**Kunjungan per Poli/Spesialisasi**")
-            t = L["poli"].value_counts().head(10)
-            hbar(t.index, t.values, BC[1], fmt=fN, axis_money=False)
-        else:
-            st.markdown("**Tren Biaya Bulanan**")
-            t = L.groupby("periode")["total"].sum().sort_index()
-            fig = go.Figure(go.Bar(x=[ml(p) for p in t.index], y=t.values, marker_color=BC[b],
-                                   hovertemplate="%{x}<br>Rp %{y:,.0f}<extra></extra>"))
-            money_axis(fig, float(t.max()) * 1.05 if len(t) else 0, "y")
-            fig.update_xaxes(type="category")
-            plot(fig, 340)
-    # ── Top Diagnosa (semua tab BMIV) ──
+    def _komp(col):
+        with col.container(border=True):
+            st.markdown("**Biaya per Komponen**")
+            top = cg.head(15)
+            hbar(top["komponen"], top["bi"], BC[b])
+
+    if b == 0:      # BMIV-01: grafik tren biaya bulanan dihapus → komponen tampil selebar layar
+        _komp(st)
+    else:
+        c1, c2 = st.columns(2)
+        _komp(c1)
+        with c2.container(border=True):
+            if b == 2:
+                st.markdown("**Distribusi ALOS (hari rawat)**")
+                bk = [("1–3", 1, 3), ("4–7", 4, 7), ("8–10", 8, 10), ("11–14", 11, 14), ("15+", 15, 999)]
+                fig = go.Figure(go.Bar(x=[x[0] + " hr" for x in bk],
+                                       y=[int(((L.los >= lo) & (L.los <= hi)).sum()) for _, lo, hi in bk],
+                                       marker_color=BC[2], name="Kasus"))
+                plot(fig, 340)
+            elif b == 1:
+                st.markdown("**Kunjungan per Poli/Spesialisasi**")
+                t = L["poli"].value_counts().head(10)
+                hbar(t.index, t.values, BC[1], fmt=fN, axis_money=False)
+            else:
+                st.markdown("**Tren Biaya Bulanan**")
+                t = L.groupby("periode")["total"].sum().sort_index()
+                fig = go.Figure(go.Bar(x=[ml(p) for p in t.index], y=t.values, marker_color=BC[b],
+                                       hovertemplate="%{x}<br>Rp %{y:,.0f}<extra></extra>"))
+                money_axis(fig, float(t.max()) * 1.05 if len(t) else 0, "y")
+                fig.update_xaxes(type="category")
+                plot(fig, 340)
+    # ── Top Diagnosa (semua tab BMIV): batang = jumlah kasus, titik = biaya ──
     dx = _dx_table(L)
-    d1, d2 = st.columns(2)
-    with d1.container(border=True):
-        st.markdown("**Top 10 Diagnosa — Biaya**")
-        st.caption(f"Diagnosa dengan total biaya disetujui tertinggi di {BS[b]} (kode ICD-10 di dalam kurung)")
-        t = dx.sort_values("bi", ascending=False).head(10)
-        hbar(t["lbl"], t["bi"], BC[b], height=380)
-    with d2.container(border=True):
-        st.markdown("**Top 10 Diagnosa — Jumlah Kasus**")
-        st.caption("Diagnosa dengan No. Kasus KK unik terbanyak")
-        t = dx.sort_values(["kas", "bi"], ascending=False).head(10)
-        hbar(t["lbl"], t["kas"], BC[b], fmt=fN, axis_money=False, height=380)
+    with st.container(border=True):
+        st.markdown("**Top 10 Diagnosa — Jumlah Kasus & Biaya**")
+        st.caption(f"Batang = jumlah kasus (No. Kasus KK unik, sumbu kiri); titik = total biaya disetujui "
+                   f"(sumbu kanan) di {BS[b]}. Kode ICD-10 di dalam kurung.")
+        combo_dx(dx.sort_values(["kas", "bi"], ascending=False).head(10), BC[b])
     with st.container(border=True):
         st.markdown("**Rincian Komponen**")
         df = pd.DataFrame(dict(Kode=cg["kode"], Komponen=cg["komponen"], Volume=cg["vol"], Biaya=cg["bi"],
@@ -1274,8 +1322,7 @@ def tab_case(eps, comp):
             st.caption("Pilih No. Kasus di atas, atau klik salah satu kasus berbiaya tertinggi:")
             cols = st.columns(4)
             for i, (c, v) in enumerate(top.items()):
-                cols[i % 4].button(f"{c} · {fR(v)}", key=f"chip{i}", on_click=pick, args=(c,), width="stretch") \
-                    if _has_width_param() else cols[i % 4].button(f"{c} · {fR(v)}", key=f"chip{i}", on_click=pick, args=(c,))
+                stretch_button(cols[i % 4], f"{c} · {fR(v)}", key=f"chip{i}", on_click=pick, args=(c,))
         return
     E = eps[eps.kasus == cur].sort_values(["tgl_s", "b"])
     cc = comp[comp.ep.isin(E.ep)]
@@ -1316,6 +1363,15 @@ def _has_width_param() -> bool:
         return False
 
 
+def stretch_button(container, label: str, **kw) -> None:
+    """Tombol selebar kontainer. Hasilnya sengaja tidak dikembalikan agar Streamlit tidak
+    menampilkan nilai 'False' di layar."""
+    if _has_width_param():
+        container.button(label, width="stretch", **kw)
+    else:
+        container.button(label, **kw)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. APLIKASI UTAMA
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1338,16 +1394,15 @@ def main():
     sb = st.sidebar
     sb.title("Utilization Review PLKK")
     up = sb.file_uploader("Upload file Excel (format template BMIV-01 s.d. BMIV-04)", type=["xlsx", "xlsm"])
-    if up is not None:
-        content, src = up.getvalue(), up.name
-    elif sample.exists():
-        content, src = sample.read_bytes(), f"{sample.name} (contoh)"
-        sb.info("Memakai file contoh **Data_Dummy.xlsx**. Upload file Anda di atas untuk menggantinya.")
-    else:
+    if up is None:      # dashboard baru muncul setelah file diupload
+        if sample.exists():
+            sb.download_button("Unduh file contoh / template", sample.read_bytes(), sample.name,
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         st.title("Dashboard Utilization Review PLKK")
         st.info("Upload file Excel dengan format template (sheet **BMIV-01**, **BMIV-02**, **BMIV-03**, **BMIV-04**) "
-                "melalui sidebar untuk memulai.")
+                "melalui sidebar untuk memulai. Semua file dengan kolom yang sama akan dihitung otomatis.")
         st.stop()
+    content, src = up.getvalue(), up.name
 
     try:
         eps, comp, warns = load_data(content, CACHE_VER)
@@ -1377,8 +1432,7 @@ def main():
     sb.multiselect("Jenis Layanan", BN, key="f_b", placeholder="Semua Layanan")
     sb.multiselect("Jenis Kasus", sorted(eps["jenis_kasus"].unique()), key="f_jk", placeholder="Semua Jenis Kasus")
     sb.multiselect("Sektor Usaha", sorted(eps["sektor"].unique()), key="f_sk", placeholder="Semua Sektor")
-    sb.button("Reset filter", on_click=reset_filters, args=(dmin, dmax), width="stretch") if _has_width_param() \
-        else sb.button("Reset filter", on_click=reset_filters, args=(dmin, dmax))
+    stretch_button(sb, "Reset filter", on_click=reset_filters, args=(dmin, dmax))
 
     dr = st.session_state.get("f_date", (dmin, dmax))
     d1 = dr[0] if len(dr) >= 1 else dmin
@@ -1393,17 +1447,16 @@ def main():
     if sel_b:
         mask &= eps["b"].isin(sel_b)
     L = eps[mask]
-    C = comp[comp["ep"].isin(set(L["ep"]))]
+    keep = np.zeros(int(comp["ep"].max()) + 1 if len(comp) else 1, dtype=bool)
+    keep[L["ep"].to_numpy()] = True
+    C = comp[keep[comp["ep"].to_numpy()]]
     periods = [p for p in all_periods if d1.isoformat()[:7] <= p <= d2.isoformat()[:7]]
     m = max(1, len(periods))
     sb.caption(f"{fN(len(L))} dari {fN(len(eps))} baris terfilter")
 
     # ── Utilitas sidebar ──
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-        eps.drop(columns=["tgl_s"]).to_excel(xw, sheet_name="Episode", index=False)
-        comp.drop(columns=["tgl"]).to_excel(xw, sheet_name="Komponen", index=False)
-    sb.download_button("Unduh data ternormalisasi (.xlsx)", buf.getvalue(), "data_ternormalisasi_plkk.xlsx",
+    sb.download_button("Unduh data ternormalisasi (.xlsx)", export_xlsx(content, CACHE_VER),
+                       "data_ternormalisasi_plkk.xlsx",
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     if sample.exists():
         sb.download_button("Unduh file contoh / template", sample.read_bytes(), sample.name,
@@ -1411,27 +1464,31 @@ def main():
 
     # ── Konten ──
     st.title("Dashboard Utilization Review PLKK")
-    tabs = st.tabs(["Executive Summary", "Tren Bulanan", "BMIV-01 RJTP", "BMIV-02 RJTL", "BMIV-03 RANAP",
-                    "BMIV-04 Khusus", "PLKK Performance", "LB-ST", "Unit Cost & Per Kapita", "Case Explorer"])
-    with tabs[9]:
-        tab_case(eps, comp)
+    # Hanya tab aktif yang dihitung & digambar → perpindahan filter/tab jauh lebih cepat
+    # (st.tabs merender semua 10 tab pada setiap perubahan filter).
+    names = ["Executive Summary", "Tren Bulanan", "BMIV-01 RJTP", "BMIV-02 RJTL", "BMIV-03 RANAP",
+             "BMIV-04 Khusus", "PLKK Performance", "LB-ST", "Unit Cost & Per Kapita", "Case Explorer"]
+    for k in ("tm", "pb", "pm", "ls", "ub", "case_sel"):      # jaga state widget saat pindah tab
+        if k in st.session_state:
+            st.session_state[k] = st.session_state[k]
+    active = st.radio("Menu", names, horizontal=True, key="tab_active", label_visibility="collapsed")
+    st.divider()
+    i = names.index(active)
+    if i == 9:
+        return tab_case(eps, comp)
     if L.empty:
-        for t in tabs[:9]:
-            with t:
-                empty()
-        return
-    with tabs[0]:
+        return empty()
+    if i == 0:
         tab_exec(L, C, m)
-    with tabs[1]:
+    elif i == 1:
         tab_trend(L, periods, m)
-    for b in range(4):
-        with tabs[2 + b]:
-            tab_bmiv(L, C, b, m)
-    with tabs[6]:
+    elif 2 <= i <= 5:
+        tab_bmiv(L, C, i - 2, m)
+    elif i == 6:
         tab_plkk(L, m)
-    with tabs[7]:
+    elif i == 7:
         tab_lbst(L, C, periods)
-    with tabs[8]:
+    else:
         tab_uc(L, C, m)
 
 
