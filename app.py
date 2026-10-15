@@ -1137,17 +1137,15 @@ def combo_dx(t: pd.DataFrame, color: str):
         fig.add_annotation(x=x, y=float(v), xref="x", yref="y2", text=f"<b>{fR(v)}</b>", showarrow=False,
                            yshift=20, bgcolor="rgba(255,255,255,0.95)", bordercolor="#ed7d31", borderwidth=1,
                            borderpad=3, font=dict(color="#7c2d12", size=12))
-    # batang di setengah bawah, garis biaya di setengah atas
-    kt = np.linspace(0, kmax, 5)
-    bt = np.linspace(0, bmax, 5)
+    # satu bidang grafik: batang & garis berbagi area yang sama (combo), garis berada di atas batang
+    bt = np.linspace(0, bmax * 1.2, 6)
     fig.update_layout(
-        yaxis=dict(title="Jumlah kasus", range=[0, kmax * 2.0], tickvals=kt,
-                   ticktext=[fN(round(v)) for v in kt]),
+        yaxis=dict(title="Jumlah kasus", range=[0, kmax * 1.5], rangemode="tozero"),
         yaxis2=dict(title="Biaya", overlaying="y", side="right", showgrid=False,
-                    range=[-bmax * 1.1, bmax * 1.3], tickvals=bt,
+                    range=[0, bmax * 1.2], tickvals=bt,
                     ticktext=[fR(v).replace("Rp ", "") if v else "0" for v in bt]))
     fig.update_xaxes(type="category", tickfont=dict(size=11))
-    plot(fig, 520)
+    plot(fig, 480)
 
 
 def tab_bmiv(L, C, b, m):
@@ -1203,8 +1201,6 @@ def tab_bmiv(L, C, b, m):
     dx = _dx_table(L)
     with st.container(border=True):
         st.markdown("**Top 10 Diagnosa — Jumlah Kasus & Biaya**")
-        st.caption(f"Batang = jumlah kasus (No. Kasus KK, sumbu kiri); garis = total biaya disetujui "
-                   f"(sumbu kanan) di {BS[b]}.")
         combo_dx(dx.sort_values(["kas", "bi"], ascending=False).head(10), BC[b])
     with st.container(border=True):
         st.markdown("**Rincian Komponen**")
